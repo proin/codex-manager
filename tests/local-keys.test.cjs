@@ -1,0 +1,126 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs/promises')
+const os = require('node:os')
+const path = require('node:path')
+const { execFile } = require('node:child_process')
+const { promisify } = require('node:util')
+const { LocalKeyStore, identityPath } = require('../electron/local-keys.cjs')
+const exec = promisify(execFile)
+
+async function fixture(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-host-key-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const sshDir = path.join(root, '.ssh')
+  return { root, sshDir, keys: new LocalKeyStore({ sshDir }) }
+}
+
+test('reading missing key status creates no files and handles IdentityFile none', async t => {
+  const { root, sshDir, keys } = await fixture(t)
+  const state = await keys.status({ identityFile: 'none' })
+  assert.equal(state.privateKeyPath, path.join(sshDir, 'codex-manager_ed25519'))
+  assert.equal(state.publicExists, false)
+  assert.equal(state.privateExists, false)
+  assert.equal(state.publicKey, '')
+  assert.deepEqual(await fs.readdir(root), [])
+})
+
+test('generating a key produces a usable pair without replacing it on later calls', async t => {
+  const { sshDir, keys } = await fixture(t)
+  const state = await keys.generate()
+  assert.equal(state.privateExists, true)
+  assert.equal(state.publicExists, true)
+  assert.match(state.publicKey, /^ssh-ed25519 /)
+  assert.match(state.fingerprint, /SHA256:/)
+  const privateKey = await fs.readFile(state.privateKeyPath)
+  const publicKey = await fs.readFile(state.publicKeyPath)
+  const second = await keys.generate()
+  assert.deepEqual(await fs.readFile(state.privateKeyPath), privateKey)
+  assert.deepEqual(await fs.readFile(state.publicKeyPath), publicKey)
+  assert.equal(second.fingerprint, state.fingerprint)
+  assert.equal((await fs.stat(state.privateKeyPath)).mode & 0o777, 0o600)
+  assert.equal((await fs.stat(state.publicKeyPath)).mode & 0o777, 0o644)
+  assert.deepEqual(await fs.readdir(sshDir), ['codex-manager_ed25519', 'codex-manager_ed25519.pub'])
+  assert.ok(!Object.hasOwn(state, 'privateKey'))
+})
+
+test('existing id_rsa keys are reused and a missing public key is derived without modifying the private key', async t => {
+  const { sshDir, keys } = await fixture(t)
+  await fs.mkdir(sshDir)
+  const privatePath = path.join(sshDir, 'id_rsa')
+  await exec('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', privatePath, '-C', 'fixture'])
+  const before = await fs.readFile(privatePath)
+  const expected = (await fs.readFile(`${privatePath}.pub`, 'utf8')).split(' ').slice(0, 2).join(' ')
+  await fs.unlink(`${privatePath}.pub`)
+  const selected = await keys.status()
+  assert.equal(selected.privateKeyPath, privatePath)
+  const generated = await keys.generate()
+  assert.equal(generated.privateKeyPath, privatePath)
+  assert.deepEqual(await fs.readFile(privatePath), before)
+  assert.equal(generated.publicKey.split(' ').slice(0, 2).join(' '), expected)
+  assert.deepEqual(await fs.readdir(sshDir), ['id_rsa', 'id_rsa.pub'])
+})
+
+test('configured identity paths support quotes and spaces', async t => {
+  const { sshDir, keys } = await fixture(t)
+  const host = { identityFile: '"~/.ssh/key with space"' }
+  const state = await keys.generate(host)
+  assert.equal(state.privateKeyPath, path.join(sshDir, 'key with space'))
+  assert.match(state.publicKey, /^ssh-ed25519 /)
+  const unquoted = await keys.status({ identityFile: path.join(sshDir, 'key with space') })
+  assert.equal(unquoted.publicKey, state.publicKey)
+})
+
+test('a public-key-only path is never overwritten', async t => {
+  const { sshDir, keys } = await fixture(t)
+  await fs.mkdir(sshDir)
+  const publicPath = path.join(sshDir, 'id_rsa.pub')
+  const content = 'preserve this public key\n'
+  await fs.writeFile(publicPath, content)
+  await assert.rejects(keys.generate(), /공개키만/)
+  assert.equal(await fs.readFile(publicPath, 'utf8'), content)
+  await assert.rejects(fs.stat(path.join(sshDir, 'id_rsa')), { code: 'ENOENT' })
+})
+
+test('encrypted keys without a public file fail without prompting or replacing the key', async t => {
+  const { sshDir, keys } = await fixture(t)
+  await fs.mkdir(sshDir)
+  const privatePath = path.join(sshDir, 'id_ed25519')
+  await exec('ssh-keygen', ['-t', 'ed25519', '-N', 'temporary-test-passphrase', '-f', privatePath, '-C', 'fixture'])
+  await fs.unlink(`${privatePath}.pub`)
+  const before = await fs.readFile(privatePath)
+  await assert.rejects(keys.generate(), /비밀번호가 설정된 키/)
+  assert.deepEqual(await fs.readFile(privatePath), before)
+  assert.deepEqual(await fs.readdir(sshDir), ['id_ed25519'])
+})
+
+test('existing identities outside the SSH directory can be read but missing external keys are not created', async t => {
+  const { root, sshDir, keys } = await fixture(t)
+  const external = path.join(root, 'external-key')
+  await exec('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', external, '-C', 'fixture'])
+  const status = await keys.status({ identityFile: external })
+  assert.equal(status.privateExists, true)
+  assert.match(status.publicKey, /^ssh-ed25519 /)
+  await assert.rejects(keys.generate({ identityFile: path.join(root, 'missing-external') }), /SSH 폴더 안/)
+  await assert.rejects(fs.stat(path.join(root, 'missing-external')), { code: 'ENOENT' })
+  await assert.rejects(fs.stat(sshDir), { code: 'ENOENT' })
+})
+
+test('parallel key creation cannot overwrite a newly installed pair', async t => {
+  const { sshDir, keys } = await fixture(t)
+  const other = new LocalKeyStore({ sshDir })
+  const results = await Promise.allSettled([keys.generate(), other.generate()])
+  assert.ok(results.some(result => result.status === 'fulfilled'))
+  const current = await keys.status()
+  const { stdout } = await exec('ssh-keygen', ['-y', '-P', '', '-f', current.privateKeyPath])
+  assert.equal(stdout.trim().split(' ').slice(0, 2).join(' '), current.publicKey.split(' ').slice(0, 2).join(' '))
+  assert.deepEqual(await fs.readdir(sshDir), ['codex-manager_ed25519', 'codex-manager_ed25519.pub'])
+})
+
+test('identity paths reject control characters and unsupported substitutions', async t => {
+  const { sshDir } = await fixture(t)
+  assert.throws(() => identityPath('bad\npath', {}, sshDir), /제어 문자/)
+  assert.throws(() => identityPath('~someone/key', {}, sshDir), /전체 파일 경로/)
+  assert.throws(() => identityPath('~/.ssh/%C', {}, sshDir), /전체 파일 경로/)
+  assert.equal(identityPath('"%d/.ssh/%h-%r-%p"', { hostName: 'server', user: 'deploy', port: '2202' }, sshDir), path.join(path.dirname(sshDir), '.ssh', 'server-deploy-2202'))
+})

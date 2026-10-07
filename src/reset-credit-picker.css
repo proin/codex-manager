@@ -1,0 +1,35 @@
+.reset-credit-picker { display: grid; gap: 14px; }
+.reset-picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.reset-picker-toolbar p { color: #5d7165; font-size: 12px; }
+.reset-picker-account { border: 1px solid #e0e8e2; border-radius: 7px; overflow: hidden; }
+.reset-picker-account-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #f7faf8; }
+.reset-picker-account-heading h3 { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.reset-picker-count { display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; min-width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
+.reset-picker-count span { color: #728277; font-size: 11px; }
+.reset-picker-count strong { min-width: 26px; font-size: 15px; font-weight: 600; text-align: right; }
+.reset-picker-table-scroll { overflow-x: auto; }
+.reset-credit-picker table { min-width: 740px; table-layout: fixed; font-size: 12px; }
+.reset-credit-picker th, .reset-credit-picker td { padding: 10px 12px; }
+.reset-credit-picker th { height: 34px; background: white; font-size: 11px; }
+.reset-credit-picker td { vertical-align: top; }
+.reset-credit-picker tbody tr:last-child td { border-bottom: 0; }
+.reset-credit-picker .reset-picker-radio-col { width: 48px; text-align: center; }
+.reset-credit-picker .reset-picker-date-col { width: 174px; text-align: right; }
+.reset-credit-picker .reset-picker-status-col { width: 146px; }
+.reset-credit-picker .reset-picker-date { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+.modal .reset-credit-picker input[type=radio] { display: inline-block; width: 15px; min-height: 0; height: 15px; padding: 0; border: 0; margin: 4px 0 0; accent-color: #17775e; }
+.reset-picker-title { display: block; font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.reset-picker-status { display: inline-block; color: #7a837e; background: #f0f2f0; border-radius: 4px; padding: 1px 6px; font-size: 10px; line-height: 1.8; white-space: nowrap; }
+.reset-picker-status.available { color: #287054; background: #edf5ef; }
+.reset-picker-unavailable .reset-picker-title, .reset-picker-unavailable .reset-picker-date { color: #8b958f; }
+.reset-picker-empty, .reset-picker-note, .reset-picker-error { padding: 11px 14px; font-size: 12px; }
+.reset-picker-note { color: #77887c; }
+.reset-picker-error { color: #ad5547; }
+.reset-credit-picker > .reset-picker-error { border-radius: 5px; background: #fff6f0; }
+.reset-picker-empty { color: #77887c; min-height: 56px; }
+.reset-confirm-credit { padding-top: 6px; }
+.reset-confirm-credit .reset-confirm-title { font-size: 12px; color: #3e6550; }
+.reset-confirm-credit .reset-confirm-date { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; color: #728078; font-variant-numeric: tabular-nums; }
+.reset-confirm-credit .reset-confirm-date span:last-child { text-align: right; }
+.credit-value.reset-list-entry { border: 0; padding: 0; background: transparent; color: inherit; border-radius: 3px; }
+.credit-value.reset-list-entry:hover:not(:disabled) b { color: #17775e; text-decoration: underline; text-underline-offset: 3px; }

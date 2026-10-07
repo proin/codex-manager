@@ -1,0 +1,112 @@
+{
+  "name": "codex-account-manager",
+  "version": "0.2.3",
+  "private": true,
+  "description": "여러 Codex 계정의 사용량과 초기화권, SSH 호스트를 관리하는 데스크톱 앱",
+  "author": "Personal Tools",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "start": "npm run build && electron .",
+    "build": "vite build",
+    "test": "node --test tests/*.test.cjs",
+    "test:ui": "playwright test",
+    "test:runtime": "node scripts/smoke-runtime.cjs",
+    "test:electron": "npm run build && node scripts/smoke-electron.cjs",
+    "test:packaged": "node scripts/smoke-electron.cjs --packaged",
+    "pack": "npm run build && electron-builder --mac dir",
+    "icons:win": "node scripts/build-windows-icon.cjs",
+    "dist:mac": "npm run build && electron-builder --mac dmg --arm64 --x64 -c.directories.output=release/installers/mac",
+    "dist:win": "npm run icons:win && npm run build && electron-builder --win nsis --x64 -c.directories.output=release/installers/windows"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "lucide-react": "^0.577.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "vite": "^8.3.2"
+  },
+  "build": {
+    "appId": "local.proin.codex-account-manager",
+    "productName": "Codex Account Manager",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "artifactName": "Codex-Account-Manager-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Codex Account Manager ${version}",
+      "icon": "build/icon.icns",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Codex-Account-Manager-${version}-windows-${arch}-setup.${ext}",
+      "signExecutable": false,
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Codex Account Manager",
+      "deleteAppDataOnUninstall": false,
+      "installerLanguages": [
+        "ko_KR",
+        "en_US"
+      ],
+      "language": "1042",
+      "unicode": true
+    }
+  }
+}
