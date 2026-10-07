@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld('hostManager', Object.freeze({
   saveHost: invokeHost('saveHost'),
   deleteHost: invokeHost('deleteHost'),
   reorderHosts: invokeHost('reorderHosts'),
+  saveGroup: invokeHost('saveGroup'),
+  deleteGroup: invokeHost('deleteGroup'),
+  setGroupCollapsed: invokeHost('setGroupCollapsed'),
+  moveHostToGroup: invokeHost('moveHostToGroup'),
   refreshHosts: invokeHost('refreshHosts'),
   cancelRefresh: invokeHost('cancelRefresh'),
   getHostDetails: invokeHost('getHostDetails'),
@@ -37,6 +41,10 @@ contextBridge.exposeInMainWorld('hostManager', Object.freeze({
   inspectKeys: invokeHost('inspectKeys'),
   registerKey: invokeHost('registerKey'),
   upgradeCodex: invokeHost('upgradeCodex'),
+  startCodexLogin: invokeHost('startCodexLogin'),
+  cancelCodexLogin: invokeHost('cancelCodexLogin'),
+  openCodexLogin: invokeHost('openCodexLogin'),
+  copyCodexLoginCode: invokeHost('copyCodexLoginCode'),
   onState(callback) {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, state) => callback(state);

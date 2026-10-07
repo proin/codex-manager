@@ -2,7 +2,9 @@
 
 const { SshConfigStore } = require('./ssh-config.cjs');
 const { LocalKeyStore } = require('./local-keys.cjs');
+const crypto = require('node:crypto');
 const { SSH_OPTIONS, PROBE_TIMEOUT_MS, assertAlias, buildSshArgs, runProcess, commandError, withAskpass, parseEffectiveConfig, parseAuthorizedKeys, registrationScript, probeCodex, secureProxyCommand, upgradeScript } = require('./host-ssh.cjs');
+const { loginCodexOnHost, DEVICE_AUTH_TIMEOUT_MS } = require('./host-device-auth.cjs');
 
 const CONCURRENCY = 6;
 function copy(value) { return structuredClone(value); }
@@ -22,11 +24,15 @@ class HostService {
     this.run = options.runCommand || runProcess;
     this.probe = options.probe || (async (host, opts) => probeCodex(this.run, this.state.configPath, host, { ...opts, proxyCommand: await secureProxyCommand(this.run, this.state.configPath, host, opts) }));
     this.askpass = options.withAskpass || withAskpass;
+    this.deviceLogin = options.deviceLogin || loginCodexOnHost;
+    this.loginTimeoutMs = options.loginTimeoutMs || DEVICE_AUTH_TIMEOUT_MS;
+    this.loginCheckIntervalMs = options.loginCheckIntervalMs || 5000;
     this.effectiveResolver = options.effectiveConfig;
     this.onChange = options.onChange || (() => {});
-    this.state = { configPath: options.configPath || '', revision: '', hosts: [], error: null, refreshing: false, completed: 0, total: 0 };
+    this.state = { configPath: options.configPath || '', revision: '', connectionRevision: null, hosts: [], groups: [], error: null, refreshing: false, completed: 0, total: 0 };
     this.refresh = null;
     this.active = new Map();
+    this.logins = new Map();
     this.pending = new Set();
     this.closed = false;
   }
@@ -50,13 +56,21 @@ class HostService {
 
   applyConfig(result) {
     const previous = new Map(this.state.hosts.map((host) => [host.id, host]));
+    for (const [id, entry] of this.logins) {
+      const host = result.hosts.find((host) => host.id === id);
+      if (!host || hostSignature(host) !== entry.signature || result.configPath !== entry.configPath || (entry.connectionRevision && result.connectionRevision !== entry.connectionRevision)) {
+        this.abortCodexLoginEntry(entry, 'settings', false);
+      }
+    }
     this.state.configPath = result.configPath;
     this.state.revision = result.revision;
+    this.state.connectionRevision = result.connectionRevision || null;
+    this.state.groups = copy(result.groups || []);
     this.state.error = null;
     this.state.hosts = result.hosts.map((host) => {
       const old = previous.get(host.id);
       const same = old && hostSignature(old) === hostSignature(host);
-      const next = { ...host, connection: same ? old.connection : { status: 'unknown', message: '', checkedAt: null }, codex: same ? old.codex : emptyCodex(), operation: (same || this.active.has(host.id)) && old ? old.operation : { type: null, running: false, message: '', status: 'idle' } };
+      const next = { ...host, connection: same ? old.connection : { status: 'unknown', message: '', checkedAt: null }, codex: same ? old.codex : emptyCodex(), login: same ? old.login || null : null, operation: (same || (this.active.has(host.id) && !this.logins.has(host.id))) && old ? old.operation : { type: null, running: false, message: '', status: 'idle' } };
       // Display order changes must keep references used by active host operations.
       return same ? Object.assign(old, next) : next;
     });
@@ -92,6 +106,32 @@ class HostService {
     if (!Array.isArray(ids) || ids.length > 10000 || ids.some(id => typeof id !== 'string' || !id || id.length > 256)) throw new Error('순서를 변경할 호스트 목록을 올바르게 입력하십시오.');
     // This writes only a display-order comment, so running probes and key tasks remain valid.
     return this.applyConfig(await this.config.reorder(ids, revision));
+  }
+
+  requireRevision(revision) {
+    if (this.closed) throw new Error('호스트 관리가 종료되었습니다.');
+    if (typeof revision !== 'string' || !revision || revision.length > 256) throw new Error('호스트 목록을 다시 불러오십시오.');
+  }
+
+  async saveGroup(draft, revision) {
+    this.requireRevision(revision);
+    return this.applyConfig(await this.config.saveGroup(draft, revision));
+  }
+
+  async deleteGroup(id, revision) {
+    this.requireRevision(revision);
+    return this.applyConfig(await this.config.deleteGroup(id, revision));
+  }
+
+  async setGroupCollapsed(id, collapsed, revision) {
+    this.requireRevision(revision);
+    return this.applyConfig(await this.config.setGroupCollapsed(id, collapsed, revision));
+  }
+
+  async moveHostToGroup(hostId, groupId, revision, orderedIds) {
+    this.requireRevision(revision);
+    this.requireHost(hostId);
+    return this.applyConfig(await this.config.moveHostToGroup(hostId, groupId, revision, orderedIds));
   }
 
   cancelRefresh() {
@@ -276,12 +316,124 @@ class HostService {
     });
   }
 
+  async startCodexLogin(id) {
+    const host = this.requireHost(id, true);
+    if (this.active.has(id)) throw new Error('이 호스트에서 다른 작업이 진행 중입니다.');
+    const entry = { id, controller: new AbortController(), attemptId: crypto.randomUUID(), signature: hostSignature(host), configPath: this.state.configPath, connectionRevision: this.state.connectionRevision, stopReason: null, task: null };
+    entry.deadline = Date.now() + this.loginTimeoutMs;
+    entry.timer = setTimeout(() => this.abortCodexLoginEntry(entry, 'timeout'), this.loginTimeoutMs);
+    this.active.set(id, entry.controller);
+    this.logins.set(id, entry);
+    if (host.connection.status === 'checking') host.connection = { ...host.connection, status: 'unknown', message: '' };
+    host.login = { attemptId: entry.attemptId, status: 'starting' };
+    host.operation = { type: 'codexLogin', running: true, message: '', status: 'running' };
+    this.publish();
+    const currentHost = () => {
+      const current = this.state.hosts.find((item) => item.id === id);
+      return this.logins.get(id) === entry && current && hostSignature(current) === entry.signature && this.state.configPath === entry.configPath ? current : null;
+    };
+    entry.task = Promise.resolve().then(async () => {
+      let monitor; let checking = false;
+      const verifySettings = async () => {
+        const latest = await this.config.read();
+        const latestHost = latest.hosts.find((item) => item.id === id);
+        if (!latestHost || hostSignature(latestHost) !== entry.signature || latest.configPath !== entry.configPath || (entry.connectionRevision && latest.connectionRevision !== entry.connectionRevision)) {
+          this.abortCodexLoginEntry(entry, 'settings');
+          throw new Error('SSH 접속 정보가 변경되어 계정 전환을 중지했습니다. 목록을 다시 불러오십시오.');
+        }
+        return latest;
+      };
+      try {
+        const latest = await verifySettings();
+        if (!entry.connectionRevision && latest.revision !== this.state.revision) throw new Error('SSH 설정이 변경되었습니다. 목록을 다시 불러오십시오.');
+        if (entry.controller.signal.aborted || this.closed) return;
+        const key = await this.selectedKey(host, entry.controller.signal);
+        const proxyCommand = await secureProxyCommand(this.run, entry.configPath, host, { signal: entry.controller.signal });
+        await verifySettings();
+        if (entry.controller.signal.aborted || this.closed) return;
+        monitor = setInterval(() => {
+          if (checking || entry.controller.signal.aborted) return;
+          checking = true;
+          void verifySettings().catch(() => this.abortCodexLoginEntry(entry, 'settings')).finally(() => { checking = false; });
+        }, this.loginCheckIntervalMs);
+        const codex = await this.deviceLogin(this.run, entry.configPath, host, {
+          signal: entry.controller.signal, timeoutMs: Math.max(1, entry.deadline - Date.now()),
+          identityFile: key.privateExists ? key.privateKeyPath : undefined, proxyCommand,
+          onState: (state) => {
+            const current = currentHost();
+            if (!current || entry.controller.signal.aborted || this.closed) return;
+            current.login = { ...current.login, attemptId: entry.attemptId, ...state };
+            this.publish();
+          },
+        });
+        await verifySettings();
+        const current = currentHost();
+        if (!current || entry.controller.signal.aborted || this.closed) return;
+        current.codex = codex;
+        current.connection = { status: 'online', message: '', checkedAt: new Date().toISOString() };
+        current.login = { attemptId: entry.attemptId, status: 'completed', accountEmail: codex.accountEmail };
+        current.operation = { type: 'codexLogin', running: false, status: 'completed', message: 'Codex 로그인 계정을 변경했습니다.' };
+        this.publish();
+      } catch (error) {
+        const current = currentHost();
+        if (current && !this.closed) {
+          const canceled = !entry.stopReason && (entry.controller.signal.aborted || error.kind === 'canceled');
+          const message = entry.stopReason === 'settings' ? 'SSH 접속 정보가 변경되어 계정 전환을 중지했습니다. 목록을 다시 불러오십시오.' : entry.stopReason === 'timeout' ? '로그인 제한 시간이 지났습니다. 다시 시작하십시오.' : error.message || '계정 전환을 완료하지 못했습니다.';
+          current.login = { attemptId: entry.attemptId, status: canceled ? 'canceled' : 'error', ...(canceled ? {} : { error: message }) };
+          current.operation = { type: 'codexLogin', running: false, status: canceled ? 'canceled' : 'error', message: canceled ? '계정 전환을 취소했습니다.' : current.login.error, ...(canceled ? {} : { error: current.login.error }) };
+          this.publish();
+        }
+      } finally {
+        clearInterval(monitor);
+        clearTimeout(entry.timer);
+        const current = currentHost();
+        if (current?.login && ['starting', 'waiting', 'verifying'].includes(current.login.status)) {
+          const error = entry.stopReason === 'timeout' ? '로그인 제한 시간이 지났습니다. 다시 시작하십시오.' : entry.stopReason === 'settings' ? 'SSH 접속 정보가 변경되어 계정 전환을 중지했습니다. 목록을 다시 불러오십시오.' : null;
+          current.login = { attemptId: entry.attemptId, status: error ? 'error' : 'canceled', ...(error ? { error } : {}) };
+          current.operation = { type: 'codexLogin', running: false, status: error ? 'error' : 'canceled', message: error || '계정 전환을 취소했습니다.', ...(error ? { error } : {}) };
+          if (!this.closed) this.publish();
+        }
+        if (this.logins.get(id) === entry) this.logins.delete(id);
+        if (this.active.get(id) === entry.controller) this.active.delete(id);
+        this.pending.delete(entry.task);
+      }
+    });
+    this.pending.add(entry.task);
+    return this.snapshot();
+  }
+
+  async cancelCodexLogin(id) {
+    const host = this.requireHost(id);
+    const entry = this.logins.get(id);
+    if (!entry) return this.snapshot();
+    host.login = { attemptId: entry.attemptId, status: 'canceled' };
+    host.operation = { type: 'codexLogin', running: false, status: 'canceled', message: '계정 전환을 취소했습니다.' };
+    entry.controller.abort();
+    this.publish();
+    await entry.task;
+    return this.snapshot();
+  }
+
+  abortCodexLoginEntry(entry, reason, publish = true) {
+    if (this.logins.get(entry.id) !== entry || entry.controller.signal.aborted) return;
+    entry.stopReason = reason;
+    const current = this.state.hosts.find((host) => host.id === entry.id);
+    if (current && hostSignature(current) === entry.signature) {
+      const error = reason === 'timeout' ? '로그인 제한 시간이 지났습니다. 다시 시작하십시오.' : 'SSH 접속 정보가 변경되어 계정 전환을 중지했습니다. 목록을 다시 불러오십시오.';
+      current.login = { attemptId: entry.attemptId, status: 'error', error };
+      current.operation = { type: 'codexLogin', running: false, status: 'error', message: error, error };
+    }
+    entry.controller.abort();
+    if (publish && !this.closed) this.publish();
+  }
+
   async close() {
     this.closed = true;
     this.cancelRefresh();
     for (const controller of this.active.values()) controller.abort();
     await Promise.allSettled([...this.pending]);
     this.active.clear();
+    this.logins.clear();
   }
 }
 

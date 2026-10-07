@@ -21,6 +21,7 @@ test('reading an absent SSH config does not create files', async t => {
   const state = await store.read()
   assert.equal(state.configPath, configPath)
   assert.deepEqual(state.hosts, [])
+  assert.deepEqual(state.groups, [])
   await assert.rejects(fs.stat(path.dirname(configPath)), { code: 'ENOENT' })
   assert.equal((await store.read()).revision, state.revision)
 })
@@ -270,4 +271,291 @@ test('display reordering preserves a config symlink and target permissions', asy
   assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
   assert.ok((await fs.readFile(target, 'utf8')).endsWith(original))
   assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config'])
+})
+
+test('groups, membership and collapsed state survive reload without moving SSH sections', async t => {
+  const original = '# shared settings\r\nInclude ~/.ssh/extra.conf\r\n\r\nHost alpha\r\n  HostName 10.0.0.1\r\nMatch host office\r\n  User office-user\r\nHost beta\r\n  HostName 10.0.0.2\r\nHost *\r\n  ServerAliveInterval 30'
+  const { configPath, store } = await fixture(t, original)
+  let state = await store.read()
+  assert.ok(state.hosts.every(host => host.groupId === null))
+  state = await store.saveGroup({ name: '운영 서버' }, state.revision)
+  const groupId = state.groups[0].id
+  assert.deepEqual(state.groups, [{ id: groupId, name: '운영 서버', collapsed: false }])
+  state = await store.moveHostToGroup(state.hosts[0].id, groupId, state.revision)
+  state = await store.setGroupCollapsed(groupId, true, state.revision)
+  const written = await fs.readFile(configPath, 'utf8')
+  assert.equal(written.slice(written.indexOf('\r\n') + 2), original)
+  assert.ok(!/(?<!\r)\n/.test(written))
+  const reloaded = await new SshConfigStore({ configPath }).read()
+  assert.deepEqual(reloaded.groups, [{ id: groupId, name: '운영 서버', collapsed: true }])
+  assert.deepEqual(reloaded.hosts.map(host => host.groupId), [groupId, null, null])
+  const backups = (await fs.readdir(path.dirname(configPath))).filter(name => name.includes('.codex-manager-backup-'))
+  assert.equal(backups.length, 3)
+  const originals = await Promise.all(backups.map(name => fs.readFile(path.join(path.dirname(configPath), name), 'utf8')))
+  assert.ok(originals.includes(original))
+  assert.ok((await Promise.all(backups.map(name => fs.stat(path.join(path.dirname(configPath), name))))).every(stat => (stat.mode & 0o777) === 0o600))
+})
+
+test('group assignment and display order commit together with one backup', async t => {
+  const original = 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\nHost gamma\n  User gamma-user\n'
+  const { store, configPath } = await fixture(t, original)
+  let state = await store.read()
+  state = await store.saveGroup({ name: '개발 서버' }, state.revision)
+  const beforeMove = await fs.readFile(configPath, 'utf8')
+  const beforeFiles = (await fs.readdir(path.dirname(configPath))).length
+  const ids = state.hosts.map(host => host.id).reverse()
+  state = await store.moveHostToGroup(ids[0], state.groups[0].id, state.revision, ids)
+  assert.deepEqual(state.hosts.map(host => host.id), ids)
+  assert.equal(state.hosts[0].groupId, state.groups[0].id)
+  assert.equal((await fs.readdir(path.dirname(configPath))).length, beforeFiles + 1)
+  const backups = (await fs.readdir(path.dirname(configPath))).filter(name => name.includes('.codex-manager-backup-'))
+  assert.ok((await Promise.all(backups.map(name => fs.readFile(path.join(path.dirname(configPath), name), 'utf8')))).includes(beforeMove))
+  const written = await fs.readFile(configPath, 'utf8')
+  assert.equal(written.split('\n').filter(line => !line.startsWith('# codex-manager-host-')).join('\n'), original)
+  const reloaded = await new SshConfigStore({ configPath }).read()
+  assert.deepEqual(reloaded.hosts.map(host => [host.id, host.groupId]), state.hosts.map(host => [host.id, host.groupId]))
+})
+
+test('renaming and deleting a group keeps every host and displayed order', async t => {
+  const original = 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\n'
+  const { store, configPath } = await fixture(t, original)
+  let state = await store.read()
+  state = await store.saveGroup({ name: '개발' }, state.revision)
+  const groupId = state.groups[0].id
+  state = await store.moveHostToGroup(state.hosts[0].id, groupId, state.revision, state.hosts.map(host => host.id).reverse())
+  state = await store.saveGroup({ id: groupId, name: '운영' }, state.revision)
+  assert.equal(state.groups[0].name, '운영')
+  assert.equal(state.hosts[1].groupId, groupId)
+  const ids = state.hosts.map(host => host.id)
+  state = await store.deleteGroup(groupId, state.revision)
+  assert.deepEqual(state.groups, [])
+  assert.deepEqual(state.hosts.map(host => host.id), ids)
+  assert.ok(state.hosts.every(host => host.groupId === null))
+  assert.equal((await fs.readFile(configPath, 'utf8')).split('\n').filter(line => !line.startsWith('# codex-manager-host-')).join('\n'), original)
+})
+
+test('saving, renaming and removing hosts retain or remove their group membership', async t => {
+  const { store } = await fixture(t, 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '관리 서버' }, state.revision)
+  const groupId = state.groups[0].id
+  const alphaId = state.hosts[0].id
+  state = await store.save({ id: alphaId, groupId }, state.revision)
+  state = await store.reorder(state.hosts.map(host => host.id).reverse(), state.revision)
+  state = await store.save({ id: alphaId, alias: 'renamed' }, state.revision)
+  assert.deepEqual(state.hosts.map(host => host.alias), ['beta', 'renamed'])
+  assert.equal(state.hosts[1].groupId, groupId)
+  state = await store.save({ alias: 'new-host', user: 'new-user', groupId }, state.revision)
+  assert.equal(state.hosts.find(host => host.alias === 'new-host').groupId, groupId)
+  const renamedId = state.hosts.find(host => host.alias === 'renamed').id
+  state = await store.remove(renamedId, state.revision)
+  assert.equal(state.hosts.some(host => host.id === renamedId), false)
+  assert.equal(state.hosts.find(host => host.alias === 'new-host').groupId, groupId)
+  state = await store.save({ id: state.hosts.find(host => host.alias === 'new-host').id, groupId: null }, state.revision)
+  assert.ok(state.hosts.every(host => host.groupId === null))
+})
+
+test('duplicate imported host IDs are remapped to the same physical host after removal', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User first-user\nHost alpha\n  User second-user\nHost beta\n  User beta-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '두 번째 서버' }, state.revision)
+  const groupId = state.groups[0].id
+  const [firstId, secondId, betaId] = state.hosts.map(host => host.id)
+  state = await store.moveHostToGroup(secondId, groupId, state.revision, [secondId, betaId, firstId])
+  state = await store.remove(firstId, state.revision)
+  assert.deepEqual(state.hosts.map(host => host.user), ['second-user', 'beta-user'])
+  assert.equal(state.hosts[0].id, firstId)
+  assert.equal(state.hosts[0].groupId, groupId)
+  assert.equal(state.hosts[1].groupId, null)
+  const groupLine = (await fs.readFile(configPath, 'utf8')).split('\n').find(line => line.startsWith('# codex-manager-host-groups:'))
+  assert.deepEqual(JSON.parse(groupLine.slice(groupLine.indexOf(':') + 1)).hosts, { [firstId]: groupId })
+})
+
+test('renaming the first duplicate keeps group membership attached to each physical block', async t => {
+  const { store } = await fixture(t, 'Host alpha\n  User first-user\nHost alpha\n  User second-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '첫 번째' }, state.revision)
+  state = await store.saveGroup({ name: '두 번째' }, state.revision)
+  const [firstGroup, secondGroup] = state.groups.map(group => group.id)
+  const [firstId, secondId] = state.hosts.map(host => host.id)
+  state = await store.moveHostToGroup(firstId, firstGroup, state.revision)
+  state = await store.moveHostToGroup(secondId, secondGroup, state.revision, [secondId, firstId])
+  state = await store.save({ id: firstId, alias: 'renamed' }, state.revision)
+  assert.deepEqual(state.hosts.map(host => [host.alias, host.user, host.groupId]), [
+    ['alpha', 'second-user', secondGroup], ['renamed', 'first-user', firstGroup],
+  ])
+})
+
+test('invalid group inputs and invalid atomic orders do not change any file', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  const original = await fs.readFile(configPath, 'utf8')
+  const originalFiles = await fs.readdir(path.dirname(configPath))
+  const groupId = state.groups[0].id, hostId = state.hosts[0].id
+  for (const draft of [null, [], {}, { name: '' }, { name: ' ' }, { name: 1 }, { name: 'A\nHost bad' }, { name: 'A\u0000' }, { name: 'A'.repeat(121) }, { name: ' 운영 ' }, { id: null, name: '새 그룹' }, { id: 'missing', name: '새 그룹' }]) await assert.rejects(store.saveGroup(draft, state.revision))
+  for (const id of [undefined, '', false, 'missing', '__proto__', groupId + '\n']) await assert.rejects(store.moveHostToGroup(hostId, id, state.revision))
+  await assert.rejects(store.moveHostToGroup('missing', groupId, state.revision), /호스트를 찾을 수/)
+  await assert.rejects(store.moveHostToGroup(hostId, groupId, state.revision, [hostId]), /모든 호스트/)
+  await assert.rejects(store.moveHostToGroup(hostId, groupId, state.revision, [hostId, hostId]), /모든 호스트/)
+  await assert.rejects(store.setGroupCollapsed(groupId, 'true', state.revision), /접기 상태/)
+  await assert.rejects(store.deleteGroup('missing', state.revision), /그룹을 찾을 수/)
+  await assert.rejects(store.save({ id: hostId, groupId: 'missing', user: 'changed' }, state.revision), /그룹을 찾을 수/)
+  assert.equal(await fs.readFile(configPath, 'utf8'), original)
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), originalFiles)
+})
+
+test('stale group actions cannot overwrite another application’s SSH changes', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User alpha-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  const groupId = state.groups[0].id, hostId = state.hosts[0].id
+  const external = (await fs.readFile(configPath, 'utf8')) + '# external change\n'
+  const originalFiles = await fs.readdir(path.dirname(configPath))
+  await fs.writeFile(configPath, external)
+  for (const action of [
+    () => store.saveGroup({ name: '개발' }, state.revision),
+    () => store.saveGroup({ id: groupId, name: '개발' }, state.revision),
+    () => store.deleteGroup(groupId, state.revision),
+    () => store.setGroupCollapsed(groupId, true, state.revision),
+    () => store.moveHostToGroup(hostId, groupId, state.revision),
+  ]) await assert.rejects(action(), /설정이 변경/)
+  assert.equal(await fs.readFile(configPath, 'utf8'), external)
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), originalFiles)
+})
+
+test('competing group assignments preserve the first successful assignment and order', async t => {
+  const { store } = await fixture(t, 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  state = await store.saveGroup({ name: '개발' }, state.revision)
+  const ids = state.hosts.map(host => host.id), groups = state.groups.map(group => group.id)
+  const results = await Promise.allSettled([
+    store.moveHostToGroup(ids[0], groups[0], state.revision, [...ids].reverse()),
+    store.moveHostToGroup(ids[0], groups[1], state.revision, ids),
+  ])
+  assert.equal(results[0].status, 'fulfilled')
+  assert.equal(results[1].status, 'rejected')
+  const after = await store.read()
+  assert.deepEqual(after.hosts.map(host => host.id), [...ids].reverse())
+  assert.equal(after.hosts[1].groupId, groups[0])
+})
+
+test('unchanged group actions do not create extra backups', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User alpha-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  const files = await fs.readdir(path.dirname(configPath))
+  const groupId = state.groups[0].id
+  const unchanged = await store.saveGroup({ id: groupId, name: ' 운영 ' }, state.revision)
+  assert.equal(unchanged.revision, state.revision)
+  assert.equal((await store.setGroupCollapsed(groupId, false, state.revision)).revision, state.revision)
+  assert.equal((await store.moveHostToGroup(state.hosts[0].id, null, state.revision, [state.hosts[0].id])).revision, state.revision)
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), files)
+})
+
+test('malformed and stale group metadata do not prevent reading SSH hosts', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User alpha-user\n')
+  const hostId = (await store.read()).hosts[0].id
+  const malformed = [
+    '{invalid', '[]', 'null', JSON.stringify({ groups: [], hosts: [] }),
+    JSON.stringify({ groups: [{ id: 'group-ok', name: 'Bad\nname' }], hosts: {} }),
+    JSON.stringify({ groups: [{ id: 'group-ok', name: 'A', collapsed: 'yes' }], hosts: {} }),
+    JSON.stringify({ groups: [{ id: 'group-ok', name: 'A' }, { id: 'group-ok', name: 'B' }], hosts: {} }),
+  ]
+  for (const metadata of malformed) {
+    const original = `# codex-manager-host-groups: ${metadata}\nHost alpha\n  User alpha-user\n`
+    await fs.writeFile(configPath, original)
+    const state = await store.read()
+    assert.deepEqual(state.groups, [])
+    assert.equal(state.hosts[0].groupId, null)
+    assert.equal(await fs.readFile(configPath, 'utf8'), original)
+  }
+  const metadata = JSON.stringify({ groups: [{ id: 'group-ok', name: '운영' }], hosts: { [hostId]: 'missing-group', 'host-missing': 'group-ok' } })
+  await fs.writeFile(configPath, `# codex-manager-host-groups: ${metadata}\nHost alpha\n  User alpha-user\n`)
+  const state = await store.read()
+  assert.deepEqual(state.groups, [{ id: 'group-ok', name: '운영', collapsed: false }])
+  assert.equal(state.hosts[0].groupId, null)
+  const changed = await store.setGroupCollapsed('group-ok', true, state.revision)
+  assert.equal(changed.groups[0].collapsed, true)
+  const written = await fs.readFile(configPath, 'utf8')
+  assert.equal(written.includes('host-missing'), false)
+  assert.equal(written.includes('missing-group'), false)
+})
+
+test('group metadata inside a Host body is preserved as a comment and is not a group preference', async t => {
+  const original = 'Host alpha\n  User alpha-user\n  # codex-manager-host-groups: {"groups":[{"id":"group-body","name":"Body"}],"hosts":{}}\nHost beta\n  User beta-user\n'
+  const { store, configPath } = await fixture(t, original)
+  let state = await store.read()
+  assert.deepEqual(state.groups, [])
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  assert.deepEqual(state.groups.map(group => group.name), ['운영'])
+  assert.ok((await fs.readFile(configPath, 'utf8')).endsWith(original))
+})
+
+test('group mutations preserve a config symlink and target permissions', async t => {
+  const { root, store, configPath } = await fixture(t)
+  const target = path.join(root, 'shared-config')
+  const original = 'Host alpha\n  User alpha-user\n'
+  await fs.mkdir(path.dirname(configPath))
+  await fs.writeFile(target, original)
+  await fs.chmod(target, 0o640)
+  await fs.symlink(target, configPath)
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  state = await store.moveHostToGroup(state.hosts[0].id, state.groups[0].id, state.revision)
+  assert.equal((await fs.lstat(configPath)).isSymbolicLink(), true)
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
+  assert.ok((await fs.readFile(target, 'utf8')).endsWith(original))
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config'])
+})
+
+test('groups and membership leave OpenSSH Include, Match and wildcard resolution unchanged', async t => {
+  const { root, store, configPath } = await fixture(t, '')
+  const included = path.join(root, 'included-config')
+  await fs.writeFile(included, 'Host alpha\n  Compression yes\nHost beta\n  ServerAliveInterval 47\n')
+  const original = `# global include\nInclude ${included}\nHost alpha\n  HostName 127.0.0.1\n  User alpha-user\n  Port 2201\nHost *\n  User fallback-user\n  Port 2202\nMatch host beta\n  HostName 127.0.0.2\n  ServerAliveCountMax 8\nHost beta\n  User beta-user\n  Port 2203\n`
+  await fs.writeFile(configPath, original)
+  const resolve = async alias => (await exec('ssh', ['-G', '-F', configPath, alias])).stdout
+  const before = await Promise.all(['alpha', 'beta', 'other'].map(resolve))
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  const groupId = state.groups[0].id
+  state = await store.moveHostToGroup(state.hosts[0].id, groupId, state.revision, state.hosts.map(host => host.id).reverse())
+  state = await store.setGroupCollapsed(groupId, true, state.revision)
+  state = await store.saveGroup({ id: groupId, name: '서비스 서버' }, state.revision)
+  assert.deepEqual(await Promise.all(['alpha', 'beta', 'other'].map(resolve)), before)
+  await store.deleteGroup(groupId, state.revision)
+  assert.deepEqual(await Promise.all(['alpha', 'beta', 'other'].map(resolve)), before)
+})
+
+test('connection revision ignores group and order preferences but detects global SSH changes', async t => {
+  const original = '# global options\r\nInclude ~/.ssh/extra.conf\r\nHost alpha\r\n  User alpha-user\r\nHost beta\r\n  User beta-user\r\nHost *\r\n  ServerAliveInterval 30\r\n'
+  const { store, configPath } = await fixture(t, original)
+  let state = await store.read()
+  const initial = state.connectionRevision
+  state = await store.saveGroup({ id: undefined, name: '운영' }, state.revision)
+  assert.equal(state.connectionRevision, initial)
+  const groupId = state.groups[0].id
+  state = await store.moveHostToGroup(state.hosts[0].id, groupId, state.revision, state.hosts.map(host => host.id).reverse())
+  assert.equal(state.connectionRevision, initial)
+  state = await store.setGroupCollapsed(groupId, true, state.revision)
+  assert.equal(state.connectionRevision, initial)
+  state = await store.saveGroup({ id: groupId, name: '서비스 서버' }, state.revision)
+  assert.equal(state.connectionRevision, initial)
+  state = await store.reorder(state.hosts.map(host => host.id).reverse(), state.revision)
+  assert.equal(state.connectionRevision, initial)
+  state = await store.deleteGroup(groupId, state.revision)
+  assert.equal(state.connectionRevision, initial)
+  const edited = (await fs.readFile(configPath, 'utf8')).replace('ServerAliveInterval 30', 'ServerAliveInterval 60')
+  await fs.writeFile(configPath, edited)
+  assert.notEqual((await store.read()).connectionRevision, initial)
+})
+
+test('connection revision includes app-like comments within Host sections', async t => {
+  const original = 'Host alpha\n  User alpha-user\n  # codex-manager-host-groups: inside the Host section\n'
+  const { store, configPath } = await fixture(t, original)
+  const state = await store.read()
+  await fs.writeFile(configPath, original.replace('inside the Host section', 'edited section comment'))
+  assert.notEqual((await store.read()).connectionRevision, state.connectionRevision)
 })

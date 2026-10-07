@@ -51,7 +51,7 @@ class RpcClient extends EventEmitter {
     this.child.on('close', () => this._finish(new RpcError('Codex 연결이 종료되었습니다.', 'DISCONNECTED')));
     try {
       await this._request('initialize', {
-        clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: '0.2.3' },
+        clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: require('../package.json').version },
         capabilities: { experimentalApi: true },
       });
       this._send({ method: 'initialized' });

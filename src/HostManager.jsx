@@ -1,11 +1,12 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, ArrowUpCircle, Check, GripVertical, KeyRound, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertCircle, ArrowUpCircle, Check, ChevronDown, ChevronRight, Copy, ExternalLink, Folder, FolderOpen, GripVertical, KeyRound, Loader2, Pencil, Plus, RefreshCw, Trash2, UserRound, X } from 'lucide-react';
 import './host-manager.css';
 
-const emptyState = { configPath: '', revision: '', hosts: [], refresh: { running: false } };
+const emptyState = { configPath: '', revision: '', hosts: [], groups: [], refresh: { running: false } };
 const text = value => Array.isArray(value) ? value.filter(Boolean).join(', ') || '—' : value == null || value === '' ? '—' : String(value);
-const running = host => Boolean(host.operation?.running) || ['checking', 'loading', 'connecting'].includes(host.connection?.status);
+const loginActive = login => ['starting', 'waiting', 'verifying'].includes(login?.status);
+const running = host => Boolean(host.operation?.running) || loginActive(host.login) || ['checking', 'loading', 'connecting'].includes(host.connection?.status);
 const connectable = host => host.connectable !== false;
 const connectionLabel = host => {
   switch (host.connection?.status) {
@@ -92,8 +93,8 @@ function HostModal({ title, children, tabs, footer, onClose, alert = false, wide
   </div>;
 }
 
-const blankDraft = { alias: '', hostName: '', user: '', port: '', identityFile: '', proxyJump: '' };
-function HostForm({ draft, onChange, onSubmit }) {
+const blankDraft = { alias: '', hostName: '', user: '', port: '', identityFile: '', proxyJump: '', groupId: '' };
+function HostForm({ draft, groups, onChange, onSubmit }) {
   const field = (name, label, placeholder, props = {}) => <div className={name === 'identityFile' || name === 'proxyJump' ? 'host-form-full' : ''} key={name}>
     <label htmlFor={`host-${name}`}>{label}</label><input id={`host-${name}`} name={name} value={draft[name] || ''} onChange={event => onChange({ ...draft, [name]: event.target.value })} placeholder={placeholder} autoComplete="off" {...props}/>
   </div>;
@@ -104,6 +105,7 @@ function HostForm({ draft, onChange, onSubmit }) {
     {field('port', 'SSH 포트', '기본 설정 사용', { type: 'number', min: 1, max: 65535, className: 'numeric' })}
     {field('identityFile', '개인 키 파일', '예: ~/.ssh/id_ed25519')}
     {field('proxyJump', '중간 접속 호스트', '예: bastion')}
+    <div className="host-form-full"><label htmlFor="host-groupId">그룹</label><select id="host-groupId" value={draft.groupId || ''} onChange={event => onChange({ ...draft, groupId: event.target.value })}><option value="">그룹 없음</option>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></div>
     <p className="host-form-full muted">remote-mgmt와 같은 SSH 설정 파일에 저장됩니다. 다른 SSH 설정과 주석은 유지됩니다.</p>
   </form>;
 }
@@ -205,6 +207,10 @@ export function HostManager({ bridge, isDemo = false }) {
   const tabsId = useId();
   const [password, setPassword] = useState('');
   const [action, setAction] = useState('');
+  const [groupName, setGroupName] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+  const activeLoginHost = useRef(null);
   const [pendingOrder, setPendingOrder] = useState(null);
   const [orderSaving, setOrderSaving] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
@@ -213,11 +219,17 @@ export function HostManager({ bridge, isDemo = false }) {
   const dragSource = useRef(null);
   const request = useRef(0);
   const mounted = useRef(true);
-  const apply = snapshot => { if (mounted.current && snapshot?.hosts) { setState({ ...emptyState, ...snapshot }); setLoaded(true); } };
+  const apply = snapshot => { if (mounted.current && snapshot?.hosts) { setState({ ...emptyState, ...snapshot, groups: Array.isArray(snapshot.groups) ? snapshot.groups : [] }); setLoaded(true); } };
   const run = async operation => {
     try { const result = await operation(); apply(result); return result; }
-    catch (error) { if (mounted.current) setNotice(error.message || '작업을 완료하지 못했습니다.'); return null; }
+    catch (error) {
+      if (mounted.current) setNotice(error.message || '작업을 완료하지 못했습니다.');
+      try { const latest = await bridge.getState(); apply(latest); if (mounted.current && latest?.revision) setModal(previous => previous?.revision ? { ...previous, revision: latest.revision } : previous); } catch { /* Keep the received state when reloading fails. */ }
+      return null;
+    }
   };
+  const groupsById = new Map(state.groups.map(item => [item.id, item]));
+  const groupFor = item => groupsById.has(item?.groupId) ? item.groupId : null;
   const hostsById = new Map(state.hosts.map(item => [item.id, item]));
   const visibleHosts = pendingOrder ? [...pendingOrder.map(id => hostsById.get(id)).filter(Boolean), ...state.hosts.filter(item => !pendingOrder.includes(item.id))] : state.hosts;
   const saveOrder = async (ids, focusId) => {
@@ -236,6 +248,32 @@ export function HostManager({ bridge, isDemo = false }) {
         if (focusId) requestAnimationFrame(() => document.querySelector(`.host-drag-handle[data-host-id="${CSS.escape(focusId)}"]`)?.focus());
       }
     }
+  };
+  const moveToGroup = async (hostId, groupId, ids) => {
+    if (!bridge?.moveHostToGroup || orderBusy.current) return;
+    orderBusy.current = true; setOrderSaving(true); setNotice('');
+    try { apply(await bridge.moveHostToGroup(hostId, groupId, state.revision, ids)); }
+    catch (error) {
+      if (mounted.current) setNotice(error.message || '호스트 그룹을 변경하지 못했습니다.');
+      try { apply(await bridge.getState()); } catch { /* Preserve the last snapshot. */ }
+    } finally { orderBusy.current = false; if (mounted.current) { setOrderSaving(false); setPendingOrder(null); } }
+  };
+  const dragOverGroup = (event, groupId) => {
+    if (!dragSource.current || orderBusy.current) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+    setDropTarget({ groupId });
+  };
+  const dropOnGroup = (event, groupId) => {
+    if (!dragSource.current || orderBusy.current) return;
+    event.preventDefault();
+    const sourceId = dragSource.current, source = hostsById.get(sourceId);
+    clearDrag();
+    if (!source || groupFor(source) === groupId) return;
+    const ids = visibleHosts.filter(item => item.id !== sourceId).map(item => item.id);
+    const members = visibleHosts.filter(item => item.id !== sourceId && groupFor(item) === groupId);
+    const last = members.at(-1)?.id;
+    ids.splice(last ? ids.indexOf(last) + 1 : ids.length, 0, sourceId);
+    moveToGroup(sourceId, groupId, ids);
   };
   const clearDrag = () => { dragSource.current = null; setDraggedId(null); setDropTarget(null); };
   const beginDrag = (event, item) => {
@@ -263,14 +301,17 @@ export function HostManager({ bridge, isDemo = false }) {
     clearDrag();
     if (sourceId === item.id || index < 0) return;
     ids.splice(index + (after ? 1 : 0), 0, sourceId);
-    saveOrder(ids, sourceId);
+    if (groupFor(hostsById.get(sourceId)) !== groupFor(item)) moveToGroup(sourceId, groupFor(item), ids);
+    else saveOrder(ids, sourceId);
   };
   const moveByKeyboard = (event, item) => {
     if (!['ArrowUp', 'ArrowDown'].includes(event.key) || orderBusy.current || modal || action) return;
     event.preventDefault();
-    const ids = visibleHosts.map(entry => entry.id), index = ids.indexOf(item.id);
-    const target = index + (event.key === 'ArrowUp' ? -1 : 1);
-    if (target < 0 || target >= ids.length) return;
+    const members = visibleHosts.filter(entry => groupFor(entry) === groupFor(item));
+    const memberIndex = members.findIndex(entry => entry.id === item.id);
+    const next = members[memberIndex + (event.key === 'ArrowUp' ? -1 : 1)];
+    if (!next) return;
+    const ids = visibleHosts.map(entry => entry.id), index = ids.indexOf(item.id), target = ids.indexOf(next.id);
     [ids[index], ids[target]] = [ids[target], ids[index]];
     saveOrder(ids, item.id);
   };
@@ -286,10 +327,21 @@ export function HostManager({ bridge, isDemo = false }) {
       })();
     }
     const unsubscribe = bridge?.onState?.(apply);
-    return () => { mounted.current = false; request.current++; unsubscribe?.(); };
+    return () => { mounted.current = false; request.current++; unsubscribe?.(); if (activeLoginHost.current) bridge?.cancelCodexLogin?.(activeLoginHost.current).catch(() => {}); };
   }, [bridge]);
-  const host = modal?.id ? state.hosts.find(item => item.id === modal.id) || details?.host : null;
-  const close = () => { if (action) return; request.current++; setModal(null); setPassword(''); setDetailError(''); setKeyError(''); };
+  const host = ['details', 'form', 'upgrade', 'delete', 'login'].includes(modal?.type) && modal?.id ? state.hosts.find(item => item.id === modal.id) || (modal.type === 'details' && details?.host?.id === modal.id ? details.host : null) : null;
+  activeLoginHost.current = modal?.type === 'login' && (loginActive(host?.login) || action === 'startLogin') ? host.id : null;
+  const close = async () => {
+    if (action) return;
+    if (modal?.type === 'login' && loginActive(host?.login)) {
+      setAction('cancelLogin'); setLoginError('');
+      try { apply(await bridge.cancelCodexLogin(host.id)); activeLoginHost.current = null; }
+      catch (error) { if (mounted.current) { setLoginError(error.message || '로그인을 취소하지 못했습니다.'); setAction(''); } return; }
+      if (!mounted.current) return;
+      setAction('');
+    }
+    request.current++; setModal(null); setPassword(''); setDetailError(''); setKeyError(''); setLoginError('');
+  };
   const openDetails = async target => {
     const token = ++request.current;
     setModal({ type: 'details', id: target.id }); setDetails(null); setKeyResult(null); setPassword(''); setDetailError(''); setKeyError(''); setKeyHistory([]); setDetailTab('connection'); setDetailLoading(true);
@@ -308,7 +360,7 @@ export function HostManager({ bridge, isDemo = false }) {
   const save = async event => {
     event.preventDefault(); if (action) return;
     setAction('save');
-    const payload = { ...draft, alias: draft.alias.trim(), hostName: draft.hostName.trim(), user: draft.user.trim(), port: String(draft.port || '').trim(), identityFile: draft.identityFile.trim(), proxyJump: draft.proxyJump.trim() };
+    const payload = { ...draft, alias: draft.alias.trim(), hostName: draft.hostName.trim(), user: draft.user.trim(), port: String(draft.port || '').trim(), identityFile: draft.identityFile.trim(), proxyJump: draft.proxyJump.trim(), groupId: draft.groupId || null };
     if (draft.hostPatterns) payload.hostPatterns = [payload.alias, ...draft.hostPatterns.split(/\s+/).filter((name, index) => index > 0)].join(' ');
     const result = await run(() => bridge.saveHost(payload, modal.revision));
     if (result && mounted.current) setModal(null);
@@ -381,11 +433,84 @@ export function HostManager({ bridge, isDemo = false }) {
     if (mounted.current) { setAction(''); if (result) setModal(null); }
   };
 
+  const openGroupForm = group => { setGroupName(group?.name || ''); setModal({ type: 'groupForm', id: group?.id, revision: state.revision }); setNotice(''); };
+  const saveGroup = async event => {
+    event.preventDefault(); if (action || !groupName.trim()) return;
+    setAction('saveGroup');
+    const result = await run(() => bridge.saveGroup({ ...(modal.id ? { id: modal.id } : {}), name: groupName.trim() }, modal.revision));
+    if (mounted.current) { setAction(''); if (result) setModal(null); }
+  };
+  const deleteGroup = async () => {
+    if (action) return;
+    setAction('deleteGroup'); const result = await run(() => bridge.deleteGroup(modal.id, modal.revision));
+    if (mounted.current) { setAction(''); if (result) setModal(null); }
+  };
+  const collapseGroup = async group => {
+    if (orderBusy.current || action) return;
+    orderBusy.current = true; setOrderSaving(true);
+    await run(() => bridge.setGroupCollapsed(group.id, !group.collapsed, state.revision));
+    orderBusy.current = false; if (mounted.current) setOrderSaving(false);
+  };
+  const startLogin = async () => {
+    if (!host || action || loginActive(host.login)) return;
+    setAction('startLogin'); setLoginError(''); setCopiedCode(false);
+    activeLoginHost.current = host.id;
+    try { apply(await bridge.startCodexLogin(host.id)); }
+    catch (error) { if (mounted.current) setLoginError(error.message || '로그인을 시작하지 못했습니다.'); }
+    finally { if (mounted.current) setAction(''); }
+  };
+  const cancelLogin = async () => {
+    if (!host || action) return;
+    setAction('cancelLogin'); setLoginError('');
+    try { apply(await bridge.cancelCodexLogin(host.id)); activeLoginHost.current = null; }
+    catch (error) { if (mounted.current) setLoginError(error.message || '로그인을 취소하지 못했습니다.'); }
+    finally { if (mounted.current) setAction(''); }
+  };
+  const loginLink = async type => {
+    if (!host || action) return;
+    setAction(type); setLoginError('');
+    try { if (type === 'copyLoginCode') { await bridge.copyCodexLoginCode(host.id); if (mounted.current) setCopiedCode(true); } else await bridge.openCodexLogin(host.id); }
+    catch (error) { if (mounted.current) setLoginError(error.message || '로그인 정보를 열지 못했습니다.'); }
+    finally { if (mounted.current) setAction(''); }
+  };
+  const renderHost = item => {
+        const failed = ['offline', 'error', 'failed'].includes(item.connection?.status);
+        const statusClass = `host-status ${['online', 'connected', 'ready'].includes(item.connection?.status) ? 'connected' : failed ? 'failed' : ''}`;
+        const status = <>{running(item) && <Loader2 size={12} className="spin"/>}{connectionLabel(item)}</>;
+        const address = `${item.user ? `${item.user}@` : ''}${item.hostName || item.hostPatterns || item.alias}${item.port ? `:${item.port}` : ''}`;
+        const accountError = item.codex?.message && (item.codex.loginStatus === 'error' || accountLabel(item) === '계정 조회 실패');
+        const operationError = (item.login?.status === 'error' && item.login.error) || item.operation?.error || (item.operation?.status === 'error' ? item.operation.message : '');
+        return <tr key={item.id} data-host-id={item.id} className={`${draggedId === item.id ? 'host-dragging' : ''} ${dropTarget?.id === item.id ? (dropTarget.after ? 'host-drop-after' : 'host-drop-before') : ''}`} onDragOver={event => dragOver(event, item)} onDrop={event => drop(event, item)}>
+          <td className="host-drag-cell"><button type="button" className="host-drag-handle" data-host-id={item.id} aria-label={`${item.alias} 순서 변경`} title="드래그하거나 ↑↓ 키로 순서를 변경합니다." disabled={orderSaving || Boolean(modal) || Boolean(action) || !bridge?.reorderHosts} draggable={!orderSaving && !modal && !action && Boolean(bridge?.reorderHosts)} onDragStart={event => beginDrag(event, item)} onDragEnd={clearDrag} onKeyDown={event => moveByKeyboard(event, item)}><GripVertical size={15}/></button></td>
+          <td className={state.groups.length ? 'host-tree-host' : ''}><button className="host-entry" aria-label={`${item.alias} 호스트 정보`} title={item.alias || item.hostPatterns} onClick={() => openDetails(item)}><strong>{item.alias || item.hostPatterns}</strong></button></td>
+          <td><span className="host-address" title={address}>{address}</span></td>
+          <td>{failed && item.connection?.message ? <HostErrorPopover label={`${item.alias} 접속 실패 상세`} title="접속 실패" message={item.connection.message} className={statusClass}>{status}</HostErrorPopover> : <span className={statusClass}>{status}</span>}</td>
+          <td className="numeric"><strong className="host-version">{item.codex?.available === false ? '설치 없음' : text(item.codex?.version)}</strong></td>
+          <td>{accountError ? <HostErrorPopover label={`${item.alias} 계정 조회 실패 상세`} title="계정 조회 실패" message={item.codex.message} className="host-account-error"><span className="host-account">{accountLabel(item)}</span><AlertCircle size={12}/></HostErrorPopover> : <span className="host-account" title={accountLabel(item)}>{accountLabel(item)}</span>}</td>
+          <td><div className="host-row-actions">{operationError && <HostErrorPopover label={`${item.alias} 작업 오류 상세`} title="작업 오류" message={operationError} className="host-operation-error"><AlertCircle size={14}/></HostErrorPopover>}<button className="button small" disabled={!connectable(item) || running(item) || item.codex?.available === false} onClick={() => { setModal({ type: 'upgrade', id: item.id }); setDetailError(''); }}><ArrowUpCircle size={14}/>{['upgrade', 'upgradeCodex'].includes(item.operation?.type) && item.operation.running ? '업그레이드 중' : '업그레이드'}</button><button className="button small" disabled={!bridge?.startCodexLogin || !connectable(item) || (!loginActive(item.login) && running(item)) || item.codex?.available === false} onClick={() => { setModal({ type: 'login', id: item.id }); setLoginError(''); setCopiedCode(false); }}><UserRound size={14}/>{loginActive(item.login) ? '로그인 중' : '계정 전환'}</button><button className="icon-button" aria-label={`${item.alias} 호스트 조회`} disabled={!connectable(item) || running(item)} onClick={() => run(() => bridge.refreshHosts([item.id]))}><RefreshCw size={15} className={running(item) ? 'spin' : ''}/></button></div></td>
+        </tr>;
+
+  };
+  const renderGroup = (groupId, group) => {
+    const members = visibleHosts.filter(item => groupFor(item) === groupId), name = group?.name || '그룹 없음';
+    return <React.Fragment key={groupId || 'ungrouped'}>
+      <tr className={`host-group-row ${dropTarget?.groupId === groupId ? 'host-group-drop' : ''}`} data-group-id={groupId || ''} onDragOver={event => dragOverGroup(event, groupId)} onDrop={event => dropOnGroup(event, groupId)}>
+        <td colSpan={7}><div className="host-group-header">
+          {group ? <button type="button" className="host-group-toggle" aria-label={`${name} ${group.collapsed ? '펼치기' : '접기'}`} aria-expanded={!group.collapsed} disabled={orderSaving || Boolean(action)} onClick={() => collapseGroup(group)}>{group.collapsed ? <ChevronRight size={15}/> : <ChevronDown size={15}/>} {group.collapsed ? <Folder size={16}/> : <FolderOpen size={16}/>}<strong>{name}</strong></button> : <span className="host-ungrouped-label"><FolderOpen size={16}/><strong>{name}</strong></span>}
+          <span className="host-group-count numeric">{members.length}개</span>
+          {group && <div className="host-group-actions"><button type="button" className="icon-button" aria-label={`${name} 그룹 이름 변경`} disabled={orderSaving || Boolean(action)} onClick={() => openGroupForm(group)}><Pencil size={13}/></button><button type="button" className="icon-button" aria-label={`${name} 그룹 삭제`} disabled={orderSaving || Boolean(action)} onClick={() => setModal({ type: 'groupDelete', id: group.id, name, revision: state.revision })}><Trash2 size={13}/></button></div>}
+        </div></td>
+      </tr>
+      {!group?.collapsed && members.map(renderHost)}
+    </React.Fragment>;
+  };
+
   return <main className="host-app">
     <header className="toolbar"><div><h1>호스트관리 <span aria-hidden="true">{state.hosts.length}</span></h1>{state.configPath && <p className="host-config-path">SSH 설정 <code>{state.configPath}</code></p>}</div><div className="toolbar-actions">
       {isDemo && <span className="demo-badge">예시 데이터</span>}
       <button className="button" disabled={!bridge || state.refresh.running || orderSaving} onClick={() => run(() => bridge.reloadHosts())}><RefreshCw size={15}/>목록 새로고침</button>
       <button className="button" disabled={!bridge || !state.hosts.some(connectable) || state.refresh.running} onClick={() => run(() => bridge.refreshHosts())}><RefreshCw size={15} className={state.refresh.running ? 'spin' : ''}/>{state.refresh.running ? `${state.refresh.completed ?? state.refresh.done ?? 0}/${state.refresh.total ?? 0} 조회 중` : '전체 조회'}</button>
+      <button className="button" disabled={!bridge?.saveGroup || orderSaving} onClick={() => openGroupForm()}><Folder size={15}/>그룹 추가</button>
       <button className="button primary" disabled={!bridge || orderSaving} onClick={() => openForm()}><Plus size={16}/>호스트 추가</button>
     </div></header>
     {notice && <div className="notice" role="alert"><span>{notice}</span><button className="icon-button" aria-label="알림 닫기" onClick={() => setNotice('')}><X size={16}/></button></div>}
@@ -394,31 +519,34 @@ export function HostManager({ bridge, isDemo = false }) {
     {state.refresh.running && <div className="host-refresh-bar" role="status"><span>호스트 정보를 조회하고 있습니다.</span><button className="text-button" onClick={() => run(() => bridge.cancelRefresh())}>조회 취소</button></div>}
     <span className="host-order-announcement" role="status">{orderSaving ? '호스트 순서 저장 중' : ''}</span>
     <div className="table-scroll host-table-scroll"><table className="host-table" aria-label="호스트 목록" aria-busy={orderSaving}><thead><tr><th className="host-drag-col" aria-label="순서"/><th className="host-name-col">호스트</th><th className="host-address-col">접속 주소</th><th className="host-status-col">접속 상태</th><th className="host-version-col numeric">Codex 버전</th><th className="host-account-col">로그인 계정</th><th className="host-actions-col">작업</th></tr></thead>
-      <tbody>{visibleHosts.map(item => {
-        const failed = ['offline', 'error', 'failed'].includes(item.connection?.status);
-        const statusClass = `host-status ${['online', 'connected', 'ready'].includes(item.connection?.status) ? 'connected' : failed ? 'failed' : ''}`;
-        const status = <>{running(item) && <Loader2 size={12} className="spin"/>}{connectionLabel(item)}</>;
-        const address = `${item.user ? `${item.user}@` : ''}${item.hostName || item.hostPatterns || item.alias}${item.port ? `:${item.port}` : ''}`;
-        const accountError = item.codex?.message && (item.codex.loginStatus === 'error' || accountLabel(item) === '계정 조회 실패');
-        const operationError = item.operation?.error || (item.operation?.status === 'error' ? item.operation.message : '');
-        return <tr key={item.id} data-host-id={item.id} className={`${draggedId === item.id ? 'host-dragging' : ''} ${dropTarget?.id === item.id ? (dropTarget.after ? 'host-drop-after' : 'host-drop-before') : ''}`} onDragOver={event => dragOver(event, item)} onDrop={event => drop(event, item)}>
-          <td className="host-drag-cell"><button type="button" className="host-drag-handle" data-host-id={item.id} aria-label={`${item.alias} 순서 변경`} title="드래그하거나 ↑↓ 키로 순서를 변경합니다." disabled={orderSaving || Boolean(modal) || Boolean(action) || !bridge?.reorderHosts} draggable={!orderSaving && !modal && !action && Boolean(bridge?.reorderHosts)} onDragStart={event => beginDrag(event, item)} onDragEnd={clearDrag} onKeyDown={event => moveByKeyboard(event, item)}><GripVertical size={15}/></button></td>
-          <td><button className="host-entry" aria-label={`${item.alias} 호스트 정보`} title={item.alias || item.hostPatterns} onClick={() => openDetails(item)}><strong>{item.alias || item.hostPatterns}</strong></button></td>
-          <td><span className="host-address" title={address}>{address}</span></td>
-          <td>{failed && item.connection?.message ? <HostErrorPopover label={`${item.alias} 접속 실패 상세`} title="접속 실패" message={item.connection.message} className={statusClass}>{status}</HostErrorPopover> : <span className={statusClass}>{status}</span>}</td>
-          <td className="numeric"><strong className="host-version">{item.codex?.available === false ? '설치 없음' : text(item.codex?.version)}</strong></td>
-          <td>{accountError ? <HostErrorPopover label={`${item.alias} 계정 조회 실패 상세`} title="계정 조회 실패" message={item.codex.message} className="host-account-error"><span className="host-account">{accountLabel(item)}</span><AlertCircle size={12}/></HostErrorPopover> : <span className="host-account" title={accountLabel(item)}>{accountLabel(item)}</span>}</td>
-          <td><div className="host-row-actions">{operationError && <HostErrorPopover label={`${item.alias} 작업 오류 상세`} title="작업 오류" message={operationError} className="host-operation-error"><AlertCircle size={14}/></HostErrorPopover>}<button className="button small" disabled={!connectable(item) || running(item) || item.codex?.available === false} onClick={() => { setModal({ type: 'upgrade', id: item.id }); setDetailError(''); }}><ArrowUpCircle size={14}/>{['upgrade', 'upgradeCodex'].includes(item.operation?.type) && item.operation.running ? '업그레이드 중' : '업그레이드'}</button><button className="icon-button" aria-label={`${item.alias} 호스트 조회`} disabled={!connectable(item) || running(item)} onClick={() => run(() => bridge.refreshHosts([item.id]))}><RefreshCw size={15} className={running(item) ? 'spin' : ''}/></button></div></td>
-        </tr>;
-      })}{!state.hosts.length && <tr><td colSpan={7} className="empty">{bridge && !loaded ? '호스트 목록을 불러오는 중입니다.' : '등록된 호스트가 없습니다.'}</td></tr>}</tbody>
+      <tbody>{state.groups.length ? <>{state.groups.map(group => renderGroup(group.id, group))}{renderGroup(null)}</> : visibleHosts.map(renderHost)}{!state.hosts.length && <tr><td colSpan={7} className="empty">{bridge && !loaded ? '호스트 목록을 불러오는 중입니다.' : '등록된 호스트가 없습니다.'}</td></tr>}</tbody>
     </table></div>
     {modal?.type === 'details' && host && <HostModal wide title={`${host.alias} 호스트 정보`} onClose={close} tabs={<HostTabs active={detailTab} onChange={setDetailTab} idPrefix={tabsId}/>} footer={<><button className="button danger" disabled={Boolean(action) || running(host) || orderSaving} onClick={() => { request.current++; setPassword(''); setModal({ type: 'delete', id: host.id, revision: state.revision }); }}><Trash2 size={14}/>호스트 삭제</button><button className="button" disabled={Boolean(action) || running(host) || orderSaving} onClick={() => openForm(host)}><Pencil size={14}/>접속 정보 수정</button><button className="button" disabled={Boolean(action)} onClick={close}>닫기</button></>}>
       <HostDetails host={host} details={details} loading={detailLoading} error={detailError} keyError={keyError} keyResult={keyResult} keyHistory={keyHistory} password={password} setPassword={setPassword} action={action} tab={detailTab} idPrefix={tabsId} onInspect={() => performKeyAction('inspect')} onRegister={() => performKeyAction('register')} onGenerate={() => performKeyAction('generate')}/>
     </HostModal>}
-    {modal?.type === 'form' && <HostModal title={modal.id ? '호스트 수정' : '호스트 추가'} onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button form="host-form" type="submit" className="button primary" disabled={Boolean(action)}>{action === 'save' ? '저장 중' : '저장'}</button></>}><HostForm draft={draft} onChange={setDraft} onSubmit={save}/></HostModal>}
+    {modal?.type === 'form' && <HostModal title={modal.id ? '호스트 수정' : '호스트 추가'} onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button form="host-form" type="submit" className="button primary" disabled={Boolean(action)}>{action === 'save' ? '저장 중' : '저장'}</button></>}><HostForm draft={draft} groups={state.groups} onChange={setDraft} onSubmit={save}/></HostModal>}
     {modal?.type === 'upgrade' && host && <HostModal alert title="Codex 업그레이드" onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button className="button primary" disabled={Boolean(action) || running(host)} onClick={confirmUpgrade}>{action === 'upgrade' ? '업그레이드 중' : '업그레이드'}</button></>}>
       <p><strong>{host.alias}</strong> 호스트의 Codex를 최신 버전으로 업그레이드합니다.</p><dl className="host-confirm-info"><div><dt>호스트 주소</dt><dd>{text(host.hostName || host.alias)}</dd></div><div><dt>설치된 버전</dt><dd className="numeric">{text(host.codex?.version)}</dd></div></dl>
     </HostModal>}
     {modal?.type === 'delete' && host && <HostModal alert title="호스트 삭제" onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button className="button danger" disabled={Boolean(action)} onClick={confirmDelete}>{action === 'delete' ? '삭제 중' : '호스트 삭제'}</button></>}><p><strong>{host.alias}</strong> 호스트를 SSH 설정 파일에서 삭제합니다. remote-mgmt 목록에서도 삭제됩니다.</p></HostModal>}
+    {modal?.type === 'groupForm' && <HostModal title={modal.id ? '그룹 이름 변경' : '그룹 추가'} onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button type="submit" form="host-group-form" className="button primary" disabled={Boolean(action) || !groupName.trim()}>{action === 'saveGroup' ? '저장 중' : '저장'}</button></>}><form id="host-group-form" onSubmit={saveGroup}><label htmlFor="host-group-name">그룹 이름</label><input id="host-group-name" autoComplete="off" maxLength={120} required value={groupName} onChange={event => setGroupName(event.target.value)}/></form></HostModal>}
+    {modal?.type === 'groupDelete' && <HostModal alert title="그룹 삭제" onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button className="button danger" disabled={Boolean(action)} onClick={deleteGroup}>{action === 'deleteGroup' ? '삭제 중' : '그룹 삭제'}</button></>}><p><strong>{modal.name}</strong> 그룹을 삭제합니다. 그룹에 속한 호스트는 유지되며 그룹 없음 목록으로 이동합니다.</p></HostModal>}
+    {modal?.type === 'login' && host && <HostModal title="Codex 계정 전환" onClose={close} footer={<>
+      {loginActive(host.login) ? <button className="button danger" disabled={Boolean(action)} onClick={cancelLogin}>{action === 'cancelLogin' ? '취소 중' : '로그인 취소'}</button> : <button className="button primary" disabled={Boolean(action) || !bridge?.startCodexLogin || running(host)} onClick={startLogin}>{action === 'startLogin' ? '시작 중' : '로그인 시작'}</button>}
+      <button className="button" disabled={Boolean(action)} onClick={close}>{loginActive(host.login) ? '취소하고 닫기' : '닫기'}</button>
+    </>}>
+      <p><strong>{host.alias}</strong> 서버에서 기기 인증으로 Codex 로그인 계정을 변경합니다. 인증 페이지에서 전환할 계정으로 로그인한 후 인증 코드를 입력하십시오.</p>
+      <dl className="host-confirm-info"><div><dt>호스트 주소</dt><dd>{text(host.hostName || host.alias)}</dd></div><div><dt>로그인 계정</dt><dd>{accountLabel(host)}</dd></div></dl>
+      {(host.login?.status === 'starting' || action === 'startLogin') && <p className="host-login-status" role="status"><Loader2 size={15} className="spin"/>서버 로그인을 시작하고 있습니다.</p>}
+      {['waiting', 'verifying'].includes(host.login?.status) && <div className="host-device-login">
+        {host.login.url && <div className="host-login-url"><span>인증 페이지</span><code>{host.login.url}</code><button type="button" className="button small" disabled={Boolean(action)} onClick={() => loginLink('openLogin')}><ExternalLink size={14}/>로그인 페이지 열기</button></div>}
+        {host.login.userCode && <div className="host-login-code"><span>인증 코드</span><strong>{host.login.userCode}</strong><button className="button small" disabled={Boolean(action)} onClick={() => loginLink('copyLoginCode')}><Copy size={14}/>{copiedCode ? '복사 완료' : '인증 코드 복사'}</button></div>}
+        <p className="host-login-status" role="status"><Loader2 size={15} className="spin"/>{host.login.status === 'verifying' ? '로그인 계정을 조회하고 있습니다.' : '브라우저 인증을 기다리고 있습니다.'}</p>
+      </div>}
+      {host.login?.status === 'completed' && <p className="host-login-status completed" role="status"><Check size={16}/>계정 전환 완료{host.login.accountEmail && <strong>{host.login.accountEmail}</strong>}</p>}
+      {host.login?.status === 'canceled' && <p className="host-login-status" role="status">로그인이 취소되었습니다.</p>}
+      {(loginError || (host.login?.status === 'error' && host.login.error)) && <p className="host-inline-error host-login-error" role="alert">{loginError || host.login.error}</p>}
+    </HostModal>}
+
   </main>;
 }

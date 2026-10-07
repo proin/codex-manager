@@ -22,6 +22,12 @@
 
 연결 방식과 요청 형식은 [OpenAI 공식 Codex App Server 문서](https://learn.chatgpt.com/docs/app-server)에 설명되어 있습니다.
 
+## 호스트의 Codex 계정 전환
+
+호스트의 **계정 전환**은 SSH로 해당 서버의 Codex App Server를 실행하고 `account/login/start`의 `chatgptDeviceCode` 방식으로 시작합니다. 인증 주소와 일회용 코드만 앱에 표시합니다. 사용자가 브라우저에서 인증을 완료하면 `account/read`로 서버의 계정을 다시 조회합니다. 기존 계정을 미리 로그아웃하거나 로그인 파일을 직접 수정하지 않습니다. 취소 시 `account/login/cancel`을 보내고 SSH 연결을 종료합니다. 인증 코드와 로그인 진행 상태는 파일에 저장하지 않습니다.
+
+기기 코드 로그인은 ChatGPT 보안 설정 또는 워크스페이스 권한에서 허용되어 있어야 합니다. [OpenAI 기기 코드 로그인 안내](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)
+
 ## 실행 점검
 
 ```sh

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -53,6 +53,25 @@ async function openLogin(id) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || !['auth.openai.com', 'auth0.openai.com', 'chatgpt.com'].includes(url.hostname) || url.username || url.password) throw new Error('로그인 주소를 열 수 없습니다.');
   await shell.openExternal(url.href);
+}
+function remoteLogin(id) {
+  const host = hostService.requireHost(id, true);
+  const login = host.login;
+  if (!login || !['waiting', 'verifying'].includes(login.status)) throw new Error('호스트 로그인을 먼저 시작하십시오.');
+  return login;
+}
+async function openCodexLogin(id) {
+  const login = remoteLogin(id);
+  let url;
+  try { url = new URL(login.url); } catch { throw new Error('로그인 주소를 열 수 없습니다.'); }
+  if (url.protocol !== 'https:' || !['auth.openai.com', 'auth0.openai.com', 'chatgpt.com'].includes(url.hostname) || url.username || url.password || (url.port && url.port !== '443')) throw new Error('로그인 주소를 열 수 없습니다.');
+  await shell.openExternal(url.href);
+}
+function copyCodexLoginCode(id) {
+  const code = remoteLogin(id).userCode;
+  if (typeof code !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(code)) throw new Error('인증 코드를 복사할 수 없습니다.');
+  clipboard.writeText(code);
+  return true;
 }
 async function setupService(command) {
   service = new AccountService({ dataDir, command: command.command || '', args: [...(command.args || []), 'app-server'], onChange: publish });
@@ -113,6 +132,10 @@ function registerHandlers() {
     saveHost: (draft, revision) => hostService.saveHost(draft, revision),
     deleteHost: (id, revision) => hostService.deleteHost(id, revision),
     reorderHosts: (selected, revision) => hostService.reorderHosts(selected, revision),
+    saveGroup: (draft, revision) => hostService.saveGroup(draft, revision),
+    deleteGroup: (id, revision) => hostService.deleteGroup(id, revision),
+    setGroupCollapsed: (id, collapsed, revision) => hostService.setGroupCollapsed(id, collapsed, revision),
+    moveHostToGroup: (id, groupId, revision, orderedIds) => hostService.moveHostToGroup(id, groupId, revision, orderedIds),
     refreshHosts: selected => hostService.refreshHosts(selected),
     cancelRefresh: () => hostService.cancelRefresh(),
     getHostDetails: id => hostService.getHostDetails(id),
@@ -120,6 +143,10 @@ function registerHandlers() {
     inspectKeys: (id, password) => hostService.inspectKeys(id, password),
     registerKey: (id, password) => hostService.registerKey(id, password),
     upgradeCodex: async id => { await hostService.upgradeCodex(id); return hostService.snapshot(); },
+    startCodexLogin: id => hostService.startCodexLogin(id),
+    cancelCodexLogin: id => hostService.cancelCodexLogin(id),
+    openCodexLogin,
+    copyCodexLoginCode,
   };
   for (const [method, handler] of Object.entries(hostMethods)) {
     ipcMain.handle(`hosts:${method}`, async (event, ...args) => {

@@ -60,7 +60,7 @@ function runProcess(command, args, options = {}) {
   const spawnImpl = options.spawnImpl || spawn;
   return new Promise((resolve) => {
     const startedAt = Date.now();
-    let child; let timer; let stdout = ''; let stderr = ''; let settled = false;
+    let child; let timer; let stdout = ''; let stderr = ''; let outputSize = 0; let settled = false;
     const finish = (extra = {}, terminate = false) => {
       if (settled) return;
       settled = true; clearTimeout(timer); options.signal?.removeEventListener('abort', abort);
@@ -76,11 +76,12 @@ function runProcess(command, args, options = {}) {
       });
     } catch { finish({ stderr: 'SSH 명령을 실행하지 못했습니다.' }); return; }
     child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-      if (stdout.length > OUTPUT_LIMIT) { finish({ stderr: '호스트 응답이 너무 큽니다.' }, true); return; }
+      outputSize += chunk.length;
+      if (options.captureOutput !== false) stdout += chunk.toString();
+      if (outputSize > OUTPUT_LIMIT) { finish({ stderr: '호스트 응답이 너무 큽니다.' }, true); return; }
       try { options.onStdout?.(chunk.toString(), child, finish); } catch { finish({ stderr: '호스트 응답을 읽지 못했습니다.' }, true); }
     });
-    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-16000); });
+    child.stderr.on('data', (chunk) => { if (options.captureOutput !== false) stderr = (stderr + chunk.toString()).slice(-16000); });
     child.stdin.on('error', () => {});
     child.once('error', () => finish({ stderr: 'SSH 명령을 실행하지 못했습니다.' }, true));
     child.once('close', (code, signal) => finish({ code: code ?? 255, signal }));
@@ -218,7 +219,7 @@ async function probeCodex(run, configPath, host, options = {}) {
   const command = remoteShell(`${DISCOVER_SCRIPT}\nexec "$codex_bin" app-server\n`);
   const result = await run('ssh', buildSshArgs(configPath, host, command, options), {
     signal: options.signal, timeoutMs: options.timeoutMs || PROBE_TIMEOUT_MS,
-    onStart: (child) => child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: '0.2.3' } } })}\n`),
+    onStart: (child) => child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: '0.2.4' } } })}\n`),
     onStdout: (chunk, child, finish) => {
       buffer += chunk;
       let newline;
