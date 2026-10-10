@@ -1,5 +1,7 @@
 'use strict';
 
+const { version: APP_VERSION } = require('../package.json');
+
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -219,7 +221,7 @@ async function probeCodex(run, configPath, host, options = {}) {
   const command = remoteShell(`${DISCOVER_SCRIPT}\nexec "$codex_bin" app-server\n`);
   const result = await run('ssh', buildSshArgs(configPath, host, command, options), {
     signal: options.signal, timeoutMs: options.timeoutMs || PROBE_TIMEOUT_MS,
-    onStart: (child) => child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: '0.2.4' } } })}\n`),
+    onStart: (child) => child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: APP_VERSION } } })}\n`),
     onStdout: (chunk, child, finish) => {
       buffer += chunk;
       let newline;

@@ -4,7 +4,7 @@ export function createDemoHostBridge() {
   const key = { privateKeyPath: '/demo/.ssh/id_ed25519', publicKeyPath: '/demo/.ssh/id_ed25519.pub', privateExists: true, publicExists: true, fingerprint: 'SHA256:examplePublicKeyFingerprintForPreview', publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICodexManagerPreviewKey example@computer' };
   const registered = new Set(['demo-host-1']);
   let state = {
-    configPath: '/demo/.ssh/config', revision: 'demo-1', groups: [], refresh: { running: false, completed: 0, total: 0 },
+    configPath: '/demo/.ssh/config', revision: 'demo-1', groups: [], refresh: { running: false, completed: 0, total: 0 }, batchUpgrade: { running: false, hostIds: [] },
     hosts: [
       { id: 'demo-host-1', alias: 'dev-server', hostPatterns: 'dev-server', hostName: '192.0.2.10', user: 'ubuntu', port: '22', identityFile: '/demo/.ssh/id_ed25519', proxyJump: '', connectable: true, connection: { status: 'online', checkedAt: currentTime }, codex: { available: true, version: '0.149.0', accountEmail: 'developer@example.com', accountPlan: 'Pro', loginStatus: 'chatgpt', installMethod: 'npm' } },
       { id: 'demo-host-2', alias: 'research-server', hostPatterns: 'research-server', hostName: '192.0.2.20', user: 'researcher', port: '2222', identityFile: '/demo/.ssh/id_ed25519', proxyJump: 'dev-server', connectable: true, connection: { status: 'online', checkedAt: currentTime }, codex: { available: true, version: '0.148.0', accountEmail: 'research@example.com', accountPlan: 'Plus', loginStatus: 'chatgpt', installMethod: 'npm' } },
@@ -18,9 +18,28 @@ export function createDemoHostBridge() {
     if (!host) throw new Error('호스트를 찾을 수 없습니다.');
     return host;
   };
-  const pause = () => new Promise(resolve => setTimeout(resolve, 180));
+  const pause = (delay = 180) => new Promise(resolve => setTimeout(resolve, delay));
   const keysFor = id => registered.has(id) ? [{ id: 'example-key', keyType: 'ssh-ed25519', comment: 'example@computer', fingerprint: key.fingerprint, matchesLocal: true }] : [];
   const revision = () => { state.revision = crypto.randomUUID(); };
+  const isBusy = (host, batchHostId) => (state.batchUpgrade.running && state.batchUpgrade.hostIds.includes(host.id) && host.id !== batchHostId) || host.operation?.running || ['starting', 'waiting', 'verifying'].includes(host.login?.status) || ['checking', 'loading', 'connecting'].includes(host.connection?.status);
+  const validateIds = ids => {
+    if (!Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length || ids.some(id => !state.hosts.some(host => host.id === id))) throw new Error('호스트 목록을 다시 불러오십시오.');
+  };
+  const upgrade = async (id, batchHostId) => {
+    const host = getHost(id);
+    if (host.connectable === false) throw new Error('공통 설정은 업그레이드할 수 없습니다.');
+    if (isBusy(host, batchHostId)) throw new Error('호스트에서 다른 작업을 진행하고 있습니다.');
+    if (host.codex?.available === false) throw new Error('Codex가 설치되지 않았습니다.');
+    host.operation = { type: 'upgradeCodex', running: true, status: 'running' }; emit();
+    try {
+      await pause(id === 'demo-host-2' ? 650 : 420);
+      if (host.connection?.status === 'offline' || id === 'demo-host-3') throw new Error('서버에 접속하지 못해 Codex를 업그레이드하지 못했습니다. (예시)');
+      host.codex = { ...host.codex, available: true, version: '0.150.0' };
+      host.operation = { type: 'upgradeCodex', running: false, status: 'completed' }; emit();
+    } catch (error) {
+      host.operation = { type: 'upgradeCodex', running: false, status: 'error', error: error.message }; emit(); throw error;
+    }
+  };
   return {
     getState: async () => snapshot(), onState: callback => { listeners.add(callback); return () => listeners.delete(callback); },
     reloadHosts: async () => emit(),
@@ -32,7 +51,15 @@ export function createDemoHostBridge() {
     },
     deleteHost: async (id, expectedRevision) => {
       if (expectedRevision !== state.revision) throw new Error('SSH 설정이 변경되었습니다. 목록을 새로고침한 후 다시 삭제하십시오.');
+      if (isBusy(getHost(id))) throw new Error('작업 중인 호스트는 삭제할 수 없습니다.');
       state.hosts = state.hosts.filter(item => item.id !== id); revision(); return emit();
+    },
+    deleteHosts: async (ids, expectedRevision) => {
+      if (expectedRevision !== state.revision) throw new Error('SSH 설정이 변경되었습니다. 목록을 새로고침한 후 다시 삭제하십시오.');
+      validateIds(ids);
+      if (ids.some(id => isBusy(getHost(id)))) throw new Error('작업 중인 호스트는 삭제할 수 없습니다.');
+      const removed = new Set(ids); state.hosts = state.hosts.filter(host => !removed.has(host.id));
+      revision(); return emit();
     },
     reorderHosts: async (ids, expectedRevision) => {
       if (expectedRevision !== state.revision) throw new Error('SSH 설정이 변경되었습니다. 목록을 새로고침한 후 다시 정렬하십시오.');
@@ -111,9 +138,19 @@ export function createDemoHostBridge() {
       await navigator.clipboard.writeText(code); return true;
     },
     cancelCodexLogin: async id => { const host = getHost(id); host.login = { attemptId: host.login?.attemptId, status: 'canceled' }; return emit(); },
-    upgradeCodex: async id => {
-      const host = getHost(id); host.operation = { type: 'upgrade', running: true }; emit(); await pause();
-      host.codex = { ...host.codex, available: true, version: '0.150.0' }; host.operation = { type: 'upgrade', running: false, message: 'Codex 업그레이드가 완료되었습니다. (예시)' }; return emit();
+    upgradeCodex: async id => { await upgrade(id); return emit(); },
+    upgradeCodexBatch: async ids => {
+      validateIds(ids);
+      if (state.batchUpgrade.running) throw new Error('일괄 업그레이드가 진행 중입니다.');
+      state.batchUpgrade = { running: true, hostIds: [...ids] }; emit();
+      let results;
+      try {
+        results = await Promise.all(ids.map(async id => {
+          try { await upgrade(id, id); return { id, success: true }; }
+          catch (error) { return { id, success: false, error: error.message }; }
+        }));
+      } finally { state.batchUpgrade = { running: false, hostIds: [] }; }
+      return { state: emit(), results };
     },
   };
 }

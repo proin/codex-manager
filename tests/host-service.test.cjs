@@ -404,3 +404,319 @@ test('host operation status separates completed messages from failure details', 
   assert.equal(failed.snapshot().hosts[0].operation.error, 'fixture key failure');
   assert.equal(failed.snapshot().hosts[1].operation.status, 'idle');
 });
+
+test('batch Codex upgrades start all nine hosts together and retain independent results', async t => {
+  let running = 0; let highest = 0;
+  const started = [], complete = new Map();
+  const service = makeService({ probe: async () => ({ ...codex, version: '0.200.0' }), runCommand: async (_command, args, options) => {
+    if (args.includes('-G')) return { code: 0, stdout: 'hostname server\nuser operator\nport 22\nproxyjump none\n' };
+    const alias = args.at(-2);
+    started.push(alias); running += 1; highest = Math.max(highest, running);
+    return new Promise(resolve => {
+      let finished = false;
+      const finish = result => { if (finished) return; finished = true; running -= 1; resolve(result); };
+      complete.set(alias, finish);
+      options.signal.addEventListener('abort', () => finish({ code: 255, canceled: true }), { once: true });
+    });
+  } }, 9);
+  t.after(() => service.close());
+  await service.init();
+  for (const item of service.state.hosts) item.codex = { ...codex };
+  const ids = service.snapshot().hosts.map(item => item.id).reverse();
+  const batch = service.upgradeCodexBatch(ids);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started.length, 9);
+  assert.equal(highest, 9);
+  assert.equal(service.active.size, 9);
+  assert.deepEqual(service.snapshot().batchUpgrade, { running: true, hostIds: ids });
+  for (const [alias, finish] of complete) finish(alias === 'host4' ? { code: 1, stderr: 'Permission denied' } : { code: 0, stdout: 'codex-cli 0.200.0\n' });
+  const result = await batch;
+  assert.deepEqual(result.results.map(item => item.id), ids);
+  assert.equal(result.results.filter(item => item.success).length, 8);
+  assert.deepEqual(result.results.find(item => item.id === 'host-4'), { id: 'host-4', success: false, error: 'SSH 인증에 실패했습니다. 키 또는 서버 비밀번호를 확인하십시오.' });
+  assert.equal(result.state.hosts[4].operation.status, 'error');
+  assert.equal(result.state.hosts[8].codex.version, '0.200.0');
+  assert.deepEqual(result.state, service.snapshot());
+  assert.deepEqual(result.state.batchUpgrade, { running: false, hostIds: [] });
+  assert.equal(service.active.size, 0);
+});
+
+test('completed batch targets remain reserved after a fresh snapshot and menu re-entry', async t => {
+  const complete = new Map(), events = [], probes = [];
+  const service = makeService({ onChange: state => events.push(state), probe: async item => { probes.push(item.id); return { ...codex, version: '0.200.0' }; } }, 3);
+  t.after(() => service.close());
+  await service.init();
+  for (const item of service.state.hosts) item.codex = { ...codex };
+  service.executeOnHost = async (item, _command, { signal }) => new Promise((resolve, reject) => {
+    complete.set(item.id, resolve);
+    signal.addEventListener('abort', () => reject(new Error('fixture upgrade canceled')), { once: true });
+  });
+  const ids = ['host-0', 'host-1'];
+  const batch = service.upgradeCodexBatch(ids);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(complete.size, 2);
+  complete.get('host-0')({ code: 0 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(service.active.has('host-0'), false);
+  assert.equal(service.snapshot().hosts[0].operation.running, false);
+  assert.equal(service.snapshot().hosts[0].operation.status, 'completed');
+  assert.deepEqual(service.snapshot().batchUpgrade, { running: true, hostIds: ids });
+  const reentered = await service.reloadHosts();
+  assert.deepEqual(reentered.batchUpgrade, { running: true, hostIds: ids });
+  reentered.batchUpgrade.hostIds.length = 0;
+  assert.deepEqual(service.snapshot().batchUpgrade.hostIds, ids);
+  await assert.rejects(service.upgradeCodexBatch(['host-0']), /일괄 업그레이드가 진행 중/);
+  for (const request of [
+    () => service.upgradeCodex('host-0'),
+    () => service.generateKey('host-0'),
+    () => service.inspectKeys('host-0'),
+    () => service.registerKey('host-0'),
+    () => service.startCodexLogin('host-0'),
+  ]) await assert.rejects(request(), /다른 작업/);
+  await assert.rejects(service.saveHost({ ...service.requireHost('host-0') }, reentered.revision), /작업이 진행 중/);
+  await assert.rejects(service.deleteHosts(['host-0', 'host-2'], reentered.revision), /작업이 진행 중/);
+  await assert.rejects(service.deleteHost('host-0', reentered.revision), /작업이 진행 중/);
+  assert.equal(complete.size, 2);
+  await service.generateKey('host-2');
+  assert.equal(service.requireHost('host-2').operation.status, 'completed');
+  await service.refreshHosts(['host-0']);
+  assert.deepEqual(probes, ['host-0']);
+  service.config.reorder = async orderedIds => {
+    const current = await service.config.read();
+    return { ...current, hosts: orderedIds.map(id => current.hosts.find(item => item.id === id)) };
+  };
+  const reordered = await service.reorderHosts(['host-2', 'host-1', 'host-0'], reentered.revision);
+  assert.deepEqual(reordered.batchUpgrade, { running: true, hostIds: ids });
+  assert.equal(service.active.get('host-1').signal.aborted, false);
+  complete.get('host-1')({ code: 0 });
+  const result = await batch;
+  assert.deepEqual(result.results, ids.map(id => ({ id, success: true })));
+  assert.deepEqual(result.state.batchUpgrade, { running: false, hostIds: [] });
+  assert.equal(result.state.hosts.find(item => item.id === 'host-0').codex.version, '0.200.0');
+  assert.ok(events.some(state => state.batchUpgrade.running && state.hosts.find(item => item.id === 'host-0').operation.status === 'completed'));
+  assert.equal(events.at(-1).batchUpgrade.running, false);
+  assert.equal(service.active.size, 0);
+  assert.equal(service.pending.size, 0);
+});
+
+test('failed batch targets stay reserved until other targets finish and can be retried afterward', async t => {
+  const complete = new Map();
+  const service = makeService();
+  t.after(() => service.close());
+  await service.init();
+  for (const item of service.state.hosts) item.codex = { ...codex };
+  service.executeOnHost = async (item, _command, { signal }) => new Promise((resolve, reject) => {
+    complete.set(item.id, { resolve, reject });
+    signal.addEventListener('abort', () => reject(new Error('fixture upgrade canceled')), { once: true });
+  });
+  const batch = service.upgradeCodexBatch(['host-0', 'host-1']);
+  await new Promise(resolve => setImmediate(resolve));
+  complete.get('host-0').reject(new Error('fixture upgrade failed'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(service.requireHost('host-0').operation.status, 'error');
+  assert.equal(service.requireHost('host-0').operation.running, false);
+  assert.equal(service.active.has('host-0'), false);
+  assert.deepEqual(service.snapshot().batchUpgrade, { running: true, hostIds: ['host-0', 'host-1'] });
+  await assert.rejects(service.upgradeCodex('host-0'), /다른 작업/);
+  complete.get('host-1').resolve({ code: 0 });
+  const result = await batch;
+  assert.deepEqual(result.results, [{ id: 'host-0', success: false, error: 'fixture upgrade failed' }, { id: 'host-1', success: true }]);
+  assert.deepEqual(result.state.batchUpgrade, { running: false, hostIds: [] });
+  service.executeOnHost = async () => ({ code: 0 });
+  const retry = await service.upgradeCodexBatch(['host-0']);
+  assert.deepEqual(retry.results, [{ id: 'host-0', success: true }]);
+  assert.deepEqual(retry.state.batchUpgrade, { running: false, hostIds: [] });
+  assert.equal(service.pending.size, 0);
+});
+
+test('closing aborts unfinished batch hosts and releases all batch reservations', async () => {
+  const complete = new Map(), signals = [];
+  const service = makeService();
+  await service.init();
+  for (const item of service.state.hosts) item.codex = { ...codex };
+  service.executeOnHost = async (item, _command, { signal }) => new Promise((resolve, reject) => {
+    complete.set(item.id, resolve); signals.push(signal);
+    signal.addEventListener('abort', () => reject(new Error('fixture upgrade canceled')), { once: true });
+  });
+  const batch = service.upgradeCodexBatch(['host-0', 'host-1']);
+  await new Promise(resolve => setImmediate(resolve));
+  complete.get('host-0')({ code: 0 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(service.requireHost('host-0').operation.running, false);
+  assert.equal(service.snapshot().batchUpgrade.running, true);
+  await service.close();
+  const result = await batch;
+  assert.deepEqual(result.results, [{ id: 'host-0', success: true }, { id: 'host-1', success: false, error: 'fixture upgrade canceled' }]);
+  assert.equal(signals[1].aborted, true);
+  assert.deepEqual(service.snapshot().batchUpgrade, { running: false, hostIds: [] });
+  assert.equal(service.active.size, 0);
+  assert.equal(service.pending.size, 0);
+  await assert.rejects(service.upgradeCodexBatch(['host-0']), /종료되었습니다/);
+});
+
+test('batch upgrades skip busy and unsupported hosts without blocking an eligible host', async t => {
+  let upgrades = 0;
+  const service = makeService({ runCommand: async (_command, args) => {
+    if (args.includes('-G')) return { code: 0, stdout: 'hostname server\nuser operator\nport 22\nproxyjump none\n' };
+    upgrades += 1; return { code: 0, stdout: 'codex-cli 0.200.0\n' };
+  }, probe: async () => ({ ...codex, version: '0.200.0' }) }, 6);
+  t.after(() => service.close());
+  await service.init();
+  for (const item of service.state.hosts) item.codex = { ...codex };
+  const controller = new AbortController();
+  service.active.set('host-0', controller);
+  service.state.hosts[0].operation = { type: 'codexLogin', running: true, status: 'running', message: '' };
+  service.state.hosts[2].codex.available = false;
+  service.state.hosts[3].connectable = false;
+  service.state.hosts[4].codex.installMethod = 'manual';
+  service.state.hosts[5].codex.available = null;
+  const result = await service.upgradeCodexBatch(service.state.hosts.map(item => item.id));
+  assert.equal(upgrades, 2);
+  assert.deepEqual(result.results.map(item => item.success), [false, true, false, false, false, true]);
+  assert.match(result.results[0].error, /다른 작업/);
+  assert.match(result.results[2].error, /설치되어 있지/);
+  assert.match(result.results[3].error, /개별 호스트/);
+  assert.match(result.results[4].error, /자동 업그레이드/);
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(result.state.hosts[0].operation.running, true);
+  assert.equal(result.state.hosts[1].codex.version, '0.200.0');
+  service.active.delete('host-0');
+});
+
+test('batch upgrades discover the server installation before usage has been refreshed', async t => {
+  let upgrades = 0;
+  const service = makeService({ runCommand: async (_command, args) => {
+    if (args.includes('-G')) return { code: 0, stdout: 'hostname server\nuser operator\nport 22\nproxyjump none\n' };
+    assert.ok(args.at(-1).includes('npm install -g @openai/codex@latest'));
+    upgrades += 1; return { code: 0, stdout: 'codex-cli 0.200.0\n' };
+  }, probe: async () => ({ ...codex, version: '0.200.0' }) }, 1);
+  t.after(() => service.close());
+  await service.init();
+  assert.equal(service.snapshot().hosts[0].codex.available, null);
+  assert.equal(service.snapshot().hosts[0].codex.installMethod, null);
+  const result = await service.upgradeCodexBatch(['host-0']);
+  assert.equal(upgrades, 1);
+  assert.deepEqual(result.results, [{ id: 'host-0', success: true }]);
+  assert.equal(result.state.hosts[0].codex.version, '0.200.0');
+});
+
+test('invalid batch selections reject before canceling probes or starting any upgrade', async t => {
+  const signals = [];
+  const service = makeService({ probe: (_item, { signal }) => new Promise(resolve => {
+    signals.push(signal); signal.addEventListener('abort', () => resolve(codex), { once: true });
+  }) });
+  t.after(() => service.close());
+  await service.init();
+  const refresh = service.refreshHosts();
+  await new Promise(resolve => setImmediate(resolve));
+  let upgrades = 0;
+  service.upgradeCodex = async () => { upgrades += 1; };
+  for (const ids of [null, {}, [], ['host-0', 'host-0'], ['host-0', 'missing'], ['host-0', 1], [''], ['x'.repeat(257)]]) await assert.rejects(service.upgradeCodexBatch(ids));
+  assert.equal(upgrades, 0);
+  assert.deepEqual(service.snapshot().batchUpgrade, { running: false, hostIds: [] });
+  assert.equal(service.snapshot().refresh.running, true);
+  assert.ok(signals.every(signal => !signal.aborted));
+  service.cancelRefresh(); await refresh;
+});
+
+test('batch upgrades cancel read-only probes and ignore their older Codex versions', async t => {
+  const signals = [];
+  let finishOldProbe;
+  const service = makeService({ probe: (_item, { signal }) => new Promise(resolve => { signals.push(signal); finishOldProbe = resolve; }) }, 1);
+  t.after(() => service.close());
+  await service.init();
+  service.state.hosts[0].codex = { ...codex };
+  const refresh = service.refreshHosts();
+  await new Promise(resolve => setImmediate(resolve));
+  service.upgradeCodex = async id => { service.requireHost(id).codex = { ...codex, version: '0.200.0' }; };
+  const result = await service.upgradeCodexBatch(['host-0']);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(result.results[0].success, true);
+  finishOldProbe({ ...codex, version: '0.100.0' }); await refresh;
+  assert.equal(service.snapshot().hosts[0].codex.version, '0.200.0');
+});
+
+test('batch deletion validates every host and blocks active work before touching SSH config', async t => {
+  const { service, configPath } = await orderedService(t);
+  const before = service.snapshot(), original = await fs.readFile(configPath, 'utf8');
+  const ids = before.hosts.map(item => item.id);
+  for (const selected of [[], [ids[0], ids[0]], [ids[0], 'missing'], [ids[0], 1]]) await assert.rejects(service.deleteHosts(selected, before.revision));
+  await assert.rejects(service.deleteHosts(ids, 'outdated-revision'), /설정이 변경/);
+  const controller = new AbortController();
+  service.active.set(ids[1], controller);
+  await assert.rejects(service.deleteHosts(ids, before.revision), /작업이 진행 중/);
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(await fs.readFile(configPath, 'utf8'), original);
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config']);
+  assert.deepEqual(service.snapshot(), before);
+  service.active.delete(ids[1]);
+});
+
+test('batch deletion cancels probing and deletes all selected hosts with a single backup', async t => {
+  const signals = [];
+  const { service, configPath } = await orderedService(t, { probe: (_item, { signal }) => new Promise(resolve => {
+    signals.push(signal); signal.addEventListener('abort', () => resolve(codex), { once: true });
+  }) });
+  const before = service.snapshot(), original = await fs.readFile(configPath, 'utf8');
+  const refresh = service.refreshHosts();
+  await new Promise(resolve => setImmediate(resolve));
+  const result = await service.deleteHosts(before.hosts.map(item => item.id), before.revision);
+  await refresh;
+  assert.deepEqual(result.hosts, []);
+  assert.equal(result.refresh.running, false);
+  assert.ok(signals.every(signal => signal.aborted));
+  assert.equal(await fs.readFile(configPath, 'utf8'), '');
+  const backups = (await fs.readdir(path.dirname(configPath))).filter(name => name.includes('.codex-manager-backup-'));
+  assert.equal(backups.length, 1);
+  assert.equal(await fs.readFile(path.join(path.dirname(configPath), backups[0]), 'utf8'), original);
+  assert.equal(service.active.size, 0);
+});
+
+test('pending deletion reserves targets against upgrades, login and another deletion', async t => {
+  let completeDelete; let deleted = 0;
+  const hosts = [{ ...host, id: 'host-0', alias: 'host0' }, { ...host, id: 'host-1', alias: 'host1' }];
+  const service = makeService({ configStore: {
+    read: async () => ({ configPath: '/tmp/test-config', revision: 'one', hosts }),
+    removeMany: async () => { deleted += 1; return new Promise(resolve => { completeDelete = resolve; }); },
+  } });
+  t.after(() => service.close());
+  await service.init();
+  const unrelated = new AbortController(); service.active.set('host-1', unrelated);
+  const deletion = service.deleteHosts(['host-0'], 'one');
+  await assert.rejects(service.upgradeCodex('host-0'), /다른 작업/);
+  await assert.rejects(service.startCodexLogin('host-0'), /다른 작업/);
+  await assert.rejects(service.deleteHosts(['host-0'], 'one'), /작업이 진행 중/);
+  assert.equal(deleted, 1);
+  assert.equal(unrelated.signal.aborted, false);
+  completeDelete({ configPath: '/tmp/test-config', revision: 'two', hosts: [hosts[1]], groups: [] });
+  const result = await deletion;
+  assert.deepEqual(result.hosts.map(item => item.id), ['host-1']);
+  assert.equal(service.active.has('host-0'), false);
+  assert.equal(service.active.get('host-1'), unrelated);
+  assert.equal(service.pending.size, 0);
+  service.active.delete('host-1');
+});
+
+test('failed and competing deletions release reservations without a partial config write', async t => {
+  const { service, configPath } = await orderedService(t);
+  const before = service.snapshot(), ids = before.hosts.map(item => item.id);
+  const external = (await fs.readFile(configPath, 'utf8')) + '# external change\n';
+  await fs.writeFile(configPath, external);
+  await assert.rejects(service.deleteHosts(ids, before.revision), /설정이 변경/);
+  assert.equal(service.active.size, 0);
+  assert.equal(service.pending.size, 0);
+  assert.equal(await fs.readFile(configPath, 'utf8'), external);
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config']);
+  const latest = await service.reloadHosts();
+  const results = await Promise.allSettled([
+    service.deleteHosts([ids[0]], latest.revision),
+    service.deleteHosts([ids[1]], latest.revision),
+  ]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.filter(result => result.status === 'rejected').length, 1);
+  assert.equal(service.snapshot().hosts.length, 1);
+  assert.equal(service.active.size, 0);
+  const backups = (await fs.readdir(path.dirname(configPath))).filter(name => name.includes('.codex-manager-backup-'));
+  assert.equal(backups.length, 1);
+  assert.equal(await fs.readFile(path.join(path.dirname(configPath), backups[0]), 'utf8'), external);
+});

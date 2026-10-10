@@ -559,3 +559,89 @@ test('connection revision includes app-like comments within Host sections', asyn
   await fs.writeFile(configPath, original.replace('inside the Host section', 'edited section comment'))
   assert.notEqual((await store.read()).connectionRevision, state.connectionRevision)
 })
+
+test('batch host removal preserves remaining Host, Match and Include bytes with one backup', async t => {
+  const preamble = '# shared settings\r\nInclude ~/.ssh/extra.conf\r\n\r\n'
+  const alpha = 'Host alpha\r\n  HostName 10.0.0.1\r\n  Compression yes\r\n\r\n'
+  const conditional = '# office connection\r\nMatch host office\r\n  User office-user\r\n  Include ~/.ssh/office.conf\r\n\r\n'
+  const beta = 'Host beta\r\n  HostName 10.0.0.2\r\n  LocalForward 8123 127.0.0.1:8123\r\n\r\n'
+  const gamma = '# remaining server\r\nHost gamma\r\n  HostName 10.0.0.3\r\n  IdentityFile "~/.ssh/key with space"\r\n\r\nHost *\r\n  ServerAliveInterval 30'
+  const original = preamble + alpha + conditional + beta + gamma
+  const { configPath, store } = await fixture(t, original)
+  const state = await store.read()
+  const result = await store.removeMany(state.hosts.slice(0, 2).map(host => host.id).reverse(), state.revision)
+  assert.deepEqual(result.hosts.map(host => host.alias), ['gamma', '*'])
+  const written = await fs.readFile(configPath, 'utf8')
+  assert.equal(written, preamble + '\r\n' + conditional + '\r\n' + gamma)
+  assert.ok(!/(?<!\r)\n/.test(written))
+  const backups = (await fs.readdir(path.dirname(configPath))).filter(name => name.includes('.codex-manager-backup-'))
+  assert.equal(backups.length, 1)
+  assert.equal(await fs.readFile(path.join(path.dirname(configPath), backups[0]), 'utf8'), original)
+})
+
+test('invalid, missing and stale batch removal selections do not delete a subset or create backups', async t => {
+  const original = 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\n'
+  const { store, configPath } = await fixture(t, original)
+  const state = await store.read(), ids = state.hosts.map(host => host.id)
+  for (const selected of [null, {}, [], [ids[0], ids[0]], [ids[0], 'missing'], [ids[0], 1], [''], ['x'.repeat(257)]]) await assert.rejects(store.removeMany(selected, state.revision))
+  await assert.rejects(store.removeMany(ids, 'outdated'), /설정이 변경/)
+  assert.equal(await fs.readFile(configPath, 'utf8'), original)
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config'])
+  const external = original + '# external change\n'
+  await fs.writeFile(configPath, external)
+  await assert.rejects(store.removeMany(ids, state.revision), /설정이 변경/)
+  assert.equal(await fs.readFile(configPath, 'utf8'), external)
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config'])
+})
+
+test('batch removal cleans group assignments and order for duplicate imported blocks', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User first-user\nHost alpha\n  User second-user\nHost beta\n  User beta-user\nHost gamma\n  User gamma-user\n')
+  let state = await store.read()
+  state = await store.saveGroup({ name: '운영' }, state.revision)
+  const groupId = state.groups[0].id
+  const [firstId, secondId, betaId, gammaId] = state.hosts.map(host => host.id)
+  state = await store.moveHostToGroup(secondId, groupId, state.revision, [gammaId, secondId, betaId, firstId])
+  state = await store.moveHostToGroup(betaId, groupId, state.revision)
+  state = await store.removeMany([firstId, betaId], state.revision)
+  assert.deepEqual(state.hosts.map(host => [host.id, host.user, host.groupId]), [[gammaId, 'gamma-user', null], [firstId, 'second-user', groupId]])
+  const lines = (await fs.readFile(configPath, 'utf8')).split('\n')
+  const order = JSON.parse(lines.find(line => line.startsWith('# codex-manager-host-order:')).split(':').slice(1).join(':'))
+  const groups = JSON.parse(lines.find(line => line.startsWith('# codex-manager-host-groups:')).split(':').slice(1).join(':'))
+  assert.deepEqual(order, [gammaId, firstId])
+  assert.deepEqual(groups.hosts, { [firstId]: groupId })
+  state = await store.removeMany(state.hosts.map(host => host.id), state.revision)
+  assert.deepEqual(state.hosts, [])
+  assert.deepEqual(state.groups, [{ id: groupId, name: '운영', collapsed: false }])
+  const remaining = await fs.readFile(configPath, 'utf8')
+  assert.ok(remaining.includes('"hosts":{}'))
+  assert.ok(remaining.includes('# codex-manager-host-order: []'))
+})
+
+test('competing batch removals commit only the first complete selection', async t => {
+  const { store, configPath } = await fixture(t, 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\nHost gamma\n  User gamma-user\n')
+  const state = await store.read(), ids = state.hosts.map(host => host.id)
+  const results = await Promise.allSettled([store.removeMany([ids[0], ids[1]], state.revision), store.removeMany([ids[1], ids[2]], state.revision)])
+  assert.equal(results[0].status, 'fulfilled')
+  assert.equal(results[1].status, 'rejected')
+  assert.deepEqual((await store.read()).hosts.map(host => host.alias), ['gamma'])
+  assert.equal((await fs.readdir(path.dirname(configPath))).filter(name => name.includes('.codex-manager-backup-')).length, 1)
+})
+
+test('batch removal preserves the config symlink and target permissions', async t => {
+  const { root, configPath, store } = await fixture(t)
+  const target = path.join(root, 'shared-config')
+  await fs.mkdir(path.dirname(configPath))
+  const original = 'Host alpha\n  User alpha-user\nHost beta\n  User beta-user\nHost gamma\n  User gamma-user\n'
+  await fs.writeFile(target, original)
+  await fs.chmod(target, 0o640)
+  await fs.symlink(target, configPath)
+  const state = await store.read()
+  await store.removeMany(state.hosts.slice(0, 2).map(host => host.id), state.revision)
+  assert.equal((await fs.lstat(configPath)).isSymbolicLink(), true)
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
+  assert.equal(await fs.readFile(target, 'utf8'), 'Host gamma\n  User gamma-user\n')
+  assert.deepEqual(await fs.readdir(path.dirname(configPath)), ['config'])
+  const backups = (await fs.readdir(root)).filter(name => name.includes('.codex-manager-backup-'))
+  assert.equal(backups.length, 1)
+  assert.equal(await fs.readFile(path.join(root, backups[0]), 'utf8'), original)
+})

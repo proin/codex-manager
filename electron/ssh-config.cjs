@@ -400,16 +400,28 @@ class SshConfigStore {
   }
 
   async remove(id, revision) {
+    return this.removeMany([id], revision)
+  }
+
+  async removeMany(ids, revision) {
     return this.serializeWrite(async () => {
+      if (!Array.isArray(ids) || !ids.length || ids.length > 10000 || ids.some(id => typeof id !== 'string' || !id || id.length > 256)) throw new Error('삭제할 호스트 목록을 올바르게 선택하십시오.')
+      if (new Set(ids).size !== ids.length) throw new Error('같은 호스트를 중복 선택할 수 없습니다.')
       const snapshot = await this.load()
-      const block = snapshot.blocks.find(item => item.host.id === id)
-      if (!block) throw new Error('호스트를 찾을 수 없습니다. 목록을 다시 불러오십시오.')
-      // Keep comments immediately preceding the next Host or Match block.
-      let end = block.body.length
-      while (end > 0 && (!block.body[end - 1].text.trim() || block.body[end - 1].text.trim().startsWith('#'))) end--
-      const tail = block.body.slice(end).map(line => line.raw).join('')
-      let content = snapshot.content.slice(0, block.start) + tail + snapshot.content.slice(block.end)
-      content = remapHostMetadata(snapshot, content, snapshot.blocks.filter(item => item !== block))
+      if (!revision || revision !== snapshot.revision) throw new Error('SSH 설정이 변경되었습니다. 호스트 목록을 다시 불러온 후 저장하십시오.')
+      const requested = new Set(ids)
+      const blocks = snapshot.blocks.filter(block => requested.has(block.host.id))
+      if (blocks.length !== ids.length) throw new Error('호스트를 찾을 수 없습니다. 목록을 다시 불러오십시오.')
+      let content = snapshot.content
+      // Remove from the end so every offset still points to the original file.
+      for (const block of [...blocks].reverse()) {
+        // Keep comments immediately preceding the next Host or Match block.
+        let end = block.body.length
+        while (end > 0 && (!block.body[end - 1].text.trim() || block.body[end - 1].text.trim().startsWith('#'))) end--
+        const tail = block.body.slice(end).map(line => line.raw).join('')
+        content = content.slice(0, block.start) + tail + content.slice(block.end)
+      }
+      content = remapHostMetadata(snapshot, content, snapshot.blocks.filter(item => !requested.has(item.host.id)))
       return this.write(snapshot, content, revision)
     })
   }

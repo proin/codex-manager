@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-<defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#153142"/><stop offset="1" stop-color="#091a25"/></linearGradient><linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#72dfbc"/><stop offset="1" stop-color="#28ad8f"/></linearGradient></defs>
-<rect x="62" y="62" width="900" height="900" rx="214" fill="url(#a)"/>
-<path d="M372 275H295Q256 275 256 314V710Q256 749 295 749H372M652 275H729Q768 275 768 314V710Q768 749 729 749H652" fill="none" stroke="#ecf7f4" stroke-width="51" stroke-linecap="round"/>
-<rect x="358" y="349" width="310" height="69" rx="34.5" fill="url(#b)"/>
-<rect x="358" y="478" width="237" height="69" rx="34.5" fill="url(#b)"/>
-<rect x="358" y="607" width="162" height="69" rx="34.5" fill="url(#b)"/>
-<circle cx="661" cy="641.5" r="34.5" fill="#e6bc70"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <title>Codex Account Manager</title>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="#174B40"/>
+  <rect x="240" y="236" width="544" height="344" rx="60" fill="#F5FAF7"/>
+  <path d="m382 344 70 64-70 64m142 0h120" stroke="#174B40" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="240" y="622" width="544" height="166" rx="46" fill="#F5FAF7"/>
+  <path d="M318 682v46m48-46v46m48-46v46" stroke="#174B40" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="704" cy="705" r="25" fill="#55B593"/>
 </svg>

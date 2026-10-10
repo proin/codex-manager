@@ -1,5 +1,7 @@
 'use strict';
 
+const { version: APP_VERSION } = require('../package.json');
+
 const { DISCOVER_SCRIPT, remoteShell, buildSshArgs, commandError } = require('./host-ssh.cjs');
 
 const DEVICE_AUTH_TIMEOUT_MS = 15 * 60 * 1000;
@@ -68,7 +70,7 @@ async function loginCodexOnHost(run, configPath, host, options = {}) {
       onStart: (process) => {
         child = process;
         if (stopReason) { controller.abort(); return; }
-        send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: '0.2.4' } } });
+        send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: APP_VERSION } } });
       },
       onStdout: (chunk, process, finishProcess) => {
         child = process; finishRun = finishProcess;
