@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const screenshot = async (page, name) => {
-  const directory = path.resolve('release/verification/0.3.2');
+  const directory = path.resolve('release/verification/0.3.4');
   fs.mkdirSync(directory, { recursive: true });
   await page.screenshot({ path: path.join(directory, name) });
 };
@@ -60,6 +60,13 @@ async function open(page, options = {}, name = 'README.md') {
   await page.getByRole('button', { name: '호스트관리', exact: true }).click();
   await openFiles(page); await file(page, name).dblclick();
 }
+async function showFileInfo(page) {
+  await files(page).getByRole('button', { name: '파일 옵션', exact: true }).click();
+  const option = files(page).getByRole('menuitemcheckbox', { name: '파일 정보 표시', exact: true });
+  await expect(option).toHaveAttribute('aria-checked', 'false');
+  await option.click();
+  if (await option.isVisible()) await option.press('Escape');
+}
 
 test.beforeEach(async ({ page }) => { page.uiErrors = []; page.on('pageerror', error => page.uiErrors.push(error.message)); });
 test.afterEach(async ({ page }) => expect(page.uiErrors).toEqual([]));
@@ -72,6 +79,7 @@ test('GitHub 스타일로 제목·표·작업 목록·코드·인용을 표시�
   const tasks = article(page).getByRole('checkbox'); await expect(tasks).toHaveCount(2); await expect(tasks.nth(0)).toBeChecked(); await expect(tasks.nth(1)).not.toBeChecked(); await expect(tasks.nth(0)).toBeDisabled();
   await expect(article(page).locator('pre code')).toHaveText('const value = 42;\n');
   await expect(article(page).locator('blockquote')).toContainText('읽기 전용'); await expect(article(page).locator('del')).toHaveText('이전 내용');
+  await expect(page.getByRole('complementary', { name: '파일 정보', exact: true })).toBeHidden(); await showFileInfo(page);
   await expect(page.getByRole('complementary', { name: '파일 정보', exact: true })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(await article(page).evaluate(element => getComputedStyle(element).color)).toBe('rgb(31, 35, 40)');
@@ -100,7 +108,7 @@ test('문서의 위치 링크는 해당 제목으로 이동하고 다른 화면�
 });
 
 test('다른 마크다운 파일의 제목 링크를 유지하고 다시 같은 제목으로 이동할 수 있음', async ({ page }) => {
-  await open(page); await article(page).getByRole('link', { name: '다음 문서 제목', exact: true }).click();
+  await open(page); await showFileInfo(page); await article(page).getByRole('link', { name: '다음 문서 제목', exact: true }).click();
   await expect(article(page).getByRole('heading', { name: '세부 설명', exact: true })).toBeFocused();
   await expect(page.getByRole('complementary', { name: '파일 정보', exact: true })).toContainText('guide.markdown');
   await article(page).getByRole('link', { name: '자기 제목', exact: true }).click(); await expect(article(page).getByRole('heading', { name: '세부 설명', exact: true })).toBeFocused(); expect(await calls(page, 'read')).toHaveLength(2);
@@ -160,4 +168,13 @@ test('좁은 창에서도 마크다운 표와 코드를 문서 영역 안에서 
   await expect(page.getByRole('button', { name: '파일 목록', exact: true })).toBeInViewport();
   await screenshot(page, 'markdown-compact.png');
   await page.getByRole('button', { name: '파일 목록', exact: true }).click(); await expect(file(page, 'README.md')).toBeVisible();
+});
+
+test('문서 미리보기에서도 헤더 경로 입력으로 다른 폴더를 직접 열 수 있음', async ({ page }) => {
+  await open(page); await expect(article(page)).toBeVisible();
+  const navigator = files(page).getByRole('textbox', { name: '원격 폴더 경로', exact: true });
+  await expect(navigator).toHaveValue('/home/demo');
+  await navigator.fill('/home/demo/docs'); await navigator.press('Enter');
+  await expect(article(page)).toHaveCount(0); await expect(file(page, 'guide.markdown')).toBeVisible(); await expect(navigator).toHaveValue('/home/demo/docs');
+  expect((await calls(page, 'list')).at(-1)).toEqual({ method: 'list', id: 'host-1', path: '/home/demo/docs' });
 });
