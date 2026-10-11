@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ExternalLink, Loader2, MoreHorizontal, Plus, RefreshCw, Server, Users, X } from 'lucide-react';
+import { CircleHelp, ExternalLink, Loader2, LogIn, MoreHorizontal, Plus, RefreshCw, Server, Ticket, Users, X } from 'lucide-react';
 import { createDemoBridge } from './demo';
 import { AccountDetails } from './AccountDetails';
+import { ActionButton } from './ActionButton';
 import { HostManager } from './HostManager';
 import { createDemoHostBridge } from './host-demo';
 import { ResetCreditPicker, isResetCreditSelectable, resetCreditDate, resetCreditTitle } from './ResetCreditPicker';
@@ -190,12 +191,12 @@ function AccountApp() {
   return <main className="account-app">
     <header className="toolbar"><h1>계정 <span aria-hidden="true">{accounts.length}</span></h1><div className="toolbar-actions">
       {isDemo && <span className="demo-badge">예시 데이터</span>}
-      <button className="button" disabled={!accounts.length || state.refresh.running} onClick={() => run(() => bridge.refreshAccounts())}><RefreshCw size={15} className={state.refresh.running ? 'spin' : ''}/>{state.refresh.running ? `${state.refresh.done}/${state.refresh.total} 조회 중` : '전체 조회'}</button>
-      <button className="button primary" onClick={openAdd}><Plus size={16}/>계정 추가</button>
+      <ActionButton label="새로고침" icon={RefreshCw} busy={state.refresh.running} disabled={!accounts.length || state.refresh.running} onClick={() => run(() => bridge.refreshAccounts())}/>
+      <ActionButton label="계정 추가" icon={Plus} className="primary" onClick={openAdd}/>
     </div></header>
     {notice && <div className="notice" role="alert"><span>{notice}</span><button className="icon-button" aria-label="알림 닫기" onClick={() => setNotice('')}><X size={16}/></button></div>}
     {!state.runtime.available && <div className="runtime-notice"><span>{state.runtime.error || 'Codex 실행 파일이 필요합니다.'}</span><button className="button" onClick={() => run(() => bridge.chooseCodexBinary())}>실행 파일 선택</button></div>}
-    {selected.size > 0 && <div className="selection-bar"><span>{selected.size}개 선택</span><button className="text-button" disabled={selectedAccounts.every(busy)} onClick={() => run(() => bridge.refreshAccounts([...selected]))}>선택 조회</button><button className="text-button" disabled={!eligible.length} onClick={() => openResetList(eligible.map(account => account.id))}>초기화권 사용{eligible.length > 0 && ` (${eligible.length})`}</button><button className="text-button deselect" onClick={() => setSelected(new Set())}>선택 해제</button></div>}
+    {selected.size > 0 && <div className="selection-bar"><span>{selected.size}개 선택</span><ActionButton label="선택 새로고침" icon={RefreshCw} busy={selectedAccounts.some(account => account.status === 'loading')} disabled={selectedAccounts.every(busy)} onClick={() => run(() => bridge.refreshAccounts([...selected]))}/><ActionButton label="선택 계정 초기화권 사용" icon={Ticket} disabled={!eligible.length} onClick={() => openResetList(eligible.map(account => account.id))}/><ActionButton label="선택 해제" icon={X} className="deselect" onClick={() => setSelected(new Set())}/></div>}
     <div className="table-scroll"><table aria-label="계정 목록"><thead><tr>
       <th className="check-col"><input type="checkbox" aria-label="모든 계정 선택" disabled={!accounts.length} checked={accounts.length > 0 && selected.size === accounts.length} onChange={() => setSelected(selected.size === accounts.length ? new Set() : new Set(accounts.map(account => account.id)))}/></th>
       <th className="account-col">계정</th><th className="usage-col numeric">사용량</th><th className="balance-col numeric">크레딧</th><th className="reset-col numeric">초기화권</th><th className="actions-col">작업</th>
@@ -209,13 +210,13 @@ function AccountApp() {
       <td className="numeric"><Usage account={account}/></td>
       <td className="numeric"><span className="credit-balance">{creditBalance(account)}</span>{creditBalance(account) === '—' && <small className="muted">정보 없음</small>}</td>
       <td className="numeric"><div className="reset-cell"><button className="credit-value reset-list-entry" aria-label={`${account.label} 초기화권 목록`} disabled={!canOpenResetList(account)} onClick={() => openResetList([account.id])}><b>{integer(resetCount(account))}</b>{resetCount(account) !== null && <span>개</span>}</button>
-        {account.resetAttempt?.status === 'pending' ? <button className="button small" disabled>적용 중</button>
-          : needsRead(account) ? <button className="button small" disabled={busy(account)} onClick={() => run(() => bridge.refreshAccounts([account.id]))}>사용량 다시 조회</button>
-            : account.resetAttempt?.status === 'uncertain' ? <button className="button small" disabled={!canRetry(account)} onClick={() => setModal({ type: 'retry', ids: [account.id] })}>결과 다시 확인</button>
-              : <button className="button small" disabled={!canOpenResetList(account)} onClick={() => openResetList([account.id])}>초기화권 사용</button>}
+        {account.resetAttempt?.status === 'pending' ? <ActionButton label="초기화권 적용 중" icon={Ticket} busy disabled/>
+          : needsRead(account) ? <ActionButton label="사용량 새로고침" tooltip="사용량 새로고침" icon={RefreshCw} busy={account.status === 'loading'} disabled={busy(account)} onClick={() => run(() => bridge.refreshAccounts([account.id]))}/>
+            : account.resetAttempt?.status === 'uncertain' ? <ActionButton label="결과 다시 확인" tooltip="초기화 결과 다시 확인" icon={CircleHelp} disabled={!canRetry(account)} onClick={() => setModal({ type: 'retry', ids: [account.id] })}/>
+              : <ActionButton label="초기화권 사용" tooltip="초기화권 사용" icon={Ticket} disabled={!canOpenResetList(account)} onClick={() => openResetList([account.id])}/>}
       </div></td>
-      <td><div className="account-actions">{['signedOut', 'loggingIn'].includes(account.status) ? <button className="text-button" onClick={() => account.login ? setModal({ type: 'login', id: account.id }) : startLogin(account.id)}>로그인</button> : <button className="icon-button" aria-label={`${account.label} 사용량 조회`} disabled={busy(account)} onClick={() => run(() => bridge.refreshAccounts([account.id]))}><RefreshCw size={15} className={account.status === 'loading' ? 'spin' : ''}/></button>}
-        <button className="icon-button" aria-label={`${account.label} 메뉴`} aria-expanded={menu === account.id} onClick={() => setMenu(menu === account.id ? null : account.id)}><MoreHorizontal size={18}/></button>
+      <td><div className="account-actions">{['signedOut', 'loggingIn'].includes(account.status) ? <ActionButton label="로그인" tooltip="로그인" icon={LogIn} busy={account.status === 'loggingIn'} onClick={() => account.login ? setModal({ type: 'login', id: account.id }) : startLogin(account.id)}/> : <ActionButton label={`${account.label} 새로고침`} tooltip="새로고침" icon={RefreshCw} busy={account.status === 'loading'} disabled={busy(account)} onClick={() => run(() => bridge.refreshAccounts([account.id]))}/>}
+        <ActionButton label={`${account.label} 메뉴`} tooltip="더 보기" icon={MoreHorizontal} aria-expanded={menu === account.id} onClick={() => setMenu(menu === account.id ? null : account.id)}/>
         {menu === account.id && <div className="dropdown"><button onClick={() => { setLabel(account.label); setModal({ type: 'rename', id: account.id }); setMenu(null); }}>이름 변경</button><button onClick={() => { startLogin(account.id); setMenu(null); }}>다시 로그인</button><button className="danger-text" onClick={() => { setModal({ type: 'remove', id: account.id }); setMenu(null); }}>계정 삭제</button></div>}
       </div></td>
     </tr>)}{!accounts.length && <tr><td colSpan={6} className="empty">등록된 계정이 없습니다.</td></tr>}</tbody></table></div>

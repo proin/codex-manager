@@ -1,6 +1,6 @@
 {
   "name": "codex-account-manager",
-  "version": "0.2.9",
+  "version": "0.3.2",
   "private": true,
   "description": "여러 Codex 계정의 사용량과 초기화권, SSH 호스트를 관리하는 데스크톱 앱",
   "author": "Personal Tools",
@@ -20,9 +20,12 @@
     "dist:win": "npm run icons:win && npm run build && electron-builder --win nsis --x64 -c.directories.output=release/installers/windows"
   },
   "dependencies": {
+    "github-markdown-css": "^5.9.0",
+    "lucide-react": "^0.577.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "lucide-react": "^0.577.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

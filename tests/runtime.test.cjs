@@ -7,10 +7,18 @@ const path = require('node:path');
 const os = require('node:os');
 const { createRuntimeFinder, platformTarget, defaultCandidates } = require('../electron/runtime.cjs');
 
+function macBinary(arch = 'arm64') {
+  const header = Buffer.alloc(32);
+  header.writeUInt32LE(0xfeedfacf, 0);
+  header.writeUInt32LE(arch === 'arm64' ? 0x0100000c : 0x01000007, 4);
+  header.writeUInt32LE(2, 12);
+  return header;
+}
+
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-runtime-test-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const write = async (relative, contents = 'native test placeholder', mode = 0o700) => {
+  const write = async (relative, contents = macBinary(), mode = 0o700) => {
     const file = path.join(root, relative);
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, contents, { mode });
@@ -140,5 +148,80 @@ test('Windows launcher without a native dependency fails without attempting cmd 
   let executions = 0;
   const find = createRuntimeFinder({ platform: 'win32', arch: 'x64', home: root, execute: async () => { executions++; return { stdout: 'codex-cli 0.161.0' }; } });
   assert.equal((await find(wrapper)).available, false);
+  assert.equal(executions, 0);
+});
+
+test('Apple Silicon rejects an Intel-only custom Codex before executing it', async (t) => {
+  const { root, write } = await fixture(t);
+  const intel = await write('intel-codex', macBinary('x64'));
+  let executions = 0;
+  const find = createRuntimeFinder({ platform: 'darwin', arch: 'arm64', home: root, execute: async () => { executions++; return { stdout: 'codex-cli 0.161.0' }; } });
+  const result = await find(intel);
+  assert.equal(result.available, false);
+  assert.match(result.error, /Apple Silicon/);
+  assert.equal(executions, 0);
+});
+
+test('Apple Silicon skips an Intel candidate and discovers a native Codex', async (t) => {
+  const { root, write } = await fixture(t);
+  const intel = await write('intel-codex', macBinary('x64'));
+  const arm = await write('arm-codex');
+  const calls = [];
+  const find = createRuntimeFinder({ platform: 'darwin', arch: 'arm64', home: root, candidates: [intel, arm], execute: async (file) => { calls.push(file); return { stdout: 'codex-cli 0.161.0' }; } });
+  assert.equal((await find()).path, await fs.realpath(arm));
+  assert.deepEqual(calls, [await fs.realpath(arm)]);
+});
+
+test('an Intel manager running on Apple Silicon resolves the ARM npm dependency', async (t) => {
+  const { root, write } = await fixture(t);
+  const wrapper = await write('package/bin/codex.js', '#!/usr/bin/env node\n');
+  const arm = await write('package/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex');
+  await write('package/node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex', macBinary('x64'));
+  const calls = [];
+  const find = createRuntimeFinder({ platform: 'darwin', arch: 'x64', detectAppleSilicon: async () => true, home: root, execute: async (command, args) => { calls.push([command, args]); return { stdout: 'codex-cli 0.161.0' }; } });
+  const result = await find(wrapper);
+  const native = await fs.realpath(arm);
+  assert.equal(result.path, native);
+  assert.equal(result.command, '/usr/bin/arch');
+  assert.deepEqual(result.args, ['-arm64', native]);
+  assert.deepEqual(calls, [['/usr/bin/arch', ['-arm64', native, '--version']]]);
+});
+
+test('an Intel manager explicitly starts the ARM part of a Universal Codex on Apple Silicon', async (t) => {
+  const { root, write } = await fixture(t);
+  const universal = Buffer.alloc(112);
+  universal.writeUInt32BE(0xcafebabe, 0);
+  universal.writeUInt32BE(2, 4);
+  for (const [index, arch] of ['x64', 'arm64'].entries()) {
+    const base = 8 + index * 20;
+    const offset = 48 + index * 32;
+    universal.writeUInt32BE(arch === 'arm64' ? 0x0100000c : 0x01000007, base);
+    universal.writeUInt32BE(offset, base + 8);
+    universal.writeUInt32BE(32, base + 12);
+    macBinary(arch).copy(universal, offset);
+  }
+  const file = await write('universal-codex', universal);
+  const calls = [];
+  const find = createRuntimeFinder({ platform: 'darwin', arch: 'x64', detectAppleSilicon: async () => true, home: root, execute: async (command, args) => { calls.push([command, args]); return { stdout: 'codex-cli 0.161.0' }; } });
+  const result = await find(file);
+  assert.equal(result.available, true);
+  assert.equal(result.command, '/usr/bin/arch');
+  assert.deepEqual(result.args, ['-arm64', await fs.realpath(file)]);
+  assert.deepEqual(calls, [[result.command, [...result.args, '--version']]]);
+});
+
+test('Intel Macs continue to accept an Intel Codex executable', async (t) => {
+  const { root, write } = await fixture(t);
+  const intel = await write('intel-codex', macBinary('x64'));
+  const find = createRuntimeFinder({ platform: 'darwin', arch: 'x64', detectAppleSilicon: async () => false, home: root, execute: async () => ({ stdout: 'codex-cli 0.161.0' }) });
+  assert.equal((await find(intel)).available, true);
+});
+
+test('Apple Silicon refuses an unknown launcher instead of running it to inspect its version', async (t) => {
+  const { root, write } = await fixture(t);
+  const script = await write('codex-script', '#!/bin/sh\nexec intel-codex "$@"\n');
+  let executions = 0;
+  const find = createRuntimeFinder({ platform: 'darwin', arch: 'arm64', home: root, candidates: [script, path.join(root, 'missing')], execute: async () => { executions++; return { stdout: 'codex-cli 0.161.0' }; } });
+  assert.match((await find()).error, /Apple Silicon/);
   assert.equal(executions, 0);
 });

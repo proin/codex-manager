@@ -177,6 +177,24 @@ test('all jump stages inherit strict verification, disabled forwarding and passw
   assert.ok(observed.every((args) => args.includes('-G')));
 });
 
+test('macOS system SSH is used for every ProxyJump stage while Linux keeps PATH lookup', async () => {
+  for (const platform of ['darwin', 'linux']) {
+    const commands = [];
+    const run = async (command, args) => {
+      commands.push(command);
+      const alias = args.at(-1);
+      return { code: 0, stdout: `hostname ${alias}\nuser operator\nport 22\nproxyjump ${alias === 'one' ? 'jump-a,jump-b' : 'none'}\n` };
+    };
+    const proxy = await secureProxyCommand(run, '/tmp/config', host, { platform });
+    const executable = platform === 'darwin' ? '/usr/bin/ssh' : 'ssh';
+    assert.ok(commands.length >= 2);
+    assert.ok(commands.every(command => command === executable));
+    assert.ok(proxy.startsWith(`'${executable}' '-F'`));
+    assert.equal(proxy.split(executable).length - 1, 2);
+    assert.equal(proxy.split('StrictHostKeyChecking=yes').length - 1, 2);
+  }
+});
+
 test('Windows jump commands use native executable quoting for a spaced config path and retain each stage security options', async () => {
   const configPath = "C:\\Users\\O'Connor\\SSH Settings\\config";
   const run = async (_command, args) => {

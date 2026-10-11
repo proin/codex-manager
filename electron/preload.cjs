@@ -47,6 +47,24 @@ contextBridge.exposeInMainWorld('hostManager', Object.freeze({
   cancelCodexLogin: invokeHost('cancelCodexLogin'),
   openCodexLogin: invokeHost('openCodexLogin'),
   copyCodexLoginCode: invokeHost('copyCodexLoginCode'),
+  openSshTerminal: invokeHost('openSshTerminal'),
+  listFiles: invokeHost('listFiles'),
+  readTextFile: invokeHost('readTextFile'),
+  openFileLink: invokeHost('openFileLink'),
+  createDirectory: invokeHost('createDirectory'),
+  renameFile: invokeHost('renameFile'),
+  moveFiles: invokeHost('moveFiles'),
+  deleteFiles: invokeHost('deleteFiles'),
+  uploadFiles: invokeHost('uploadFiles'),
+  downloadFiles: invokeHost('downloadFiles'),
+  getFileTransfers: invokeHost('getFileTransfers'),
+  cancelFileTransfer: invokeHost('cancelFileTransfer'),
+  onFileTransfers(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, transfers) => callback(transfers);
+    ipcRenderer.on('hosts:fileTransfers', listener);
+    return () => ipcRenderer.removeListener('hosts:fileTransfers', listener);
+  },
   onState(callback) {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, state) => callback(state);

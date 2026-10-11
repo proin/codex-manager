@@ -3,13 +3,12 @@
 .host-toolbar-title { flex: 1; min-width: 0; }
 .host-title-line { display: flex; align-items: center; gap: 10px; }
 .host-app .toolbar-actions { flex-wrap: nowrap; flex-shrink: 0; gap: 6px; min-width: 0; }
-.host-toolbar-actions .button { min-height: 28px; height: 28px; padding: 0 8px; gap: 5px; font-size: 11px; border-radius: 5px; }
-.host-toolbar-actions .button svg { width: 13px; height: 13px; flex-shrink: 0; }
+.host-toolbar-actions .action-button { width: 30px; min-width: 30px; min-height: 30px; height: 30px; padding: 0; gap: 0; border-radius: 6px; }
 .host-config-path { color: #7a8980; font-size: 11px; margin-top: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5; }
 .host-config-path code { font: inherit; color: #566b5d; margin-left: 7px; }
-.host-table { min-width: 1080px; }
+.host-table { min-width: 900px; }
 .host-table-scroll { padding-bottom: 20px; }
-.host-drag-col { width: 32px; } .host-name-col { width: 16%; } .host-address-col { width: 22%; } .host-status-col { width: 96px; } .host-version-col { width: 102px; } .host-actions-col { width: 254px; }
+.host-drag-col { width: 32px; } .host-name-col { width: 12%; } .host-address-col { width: 18%; } .host-status-col { width: 96px; } .host-version-col { width: 102px; } .host-actions-col { width: 204px; }
 .host-table td, .host-table th { padding: 7px 10px; white-space: nowrap; }
 .host-table tbody tr { height: 44px; }
 .host-table tbody tr:hover { background: #fafcfb; }
@@ -30,7 +29,7 @@
 .host-account-error svg { flex-shrink: 0; }
 .host-row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
 .host-table td:last-child { padding-left: 8px; padding-right: 8px; }
-.host-row-actions .button.small { padding: 0 8px; font-size: 11px; }
+.host-row-actions .action-button { width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; }
 .host-row-actions > button, .host-row-actions .host-error-trigger { flex-shrink: 0; }
 .host-operation-error { width: 18px; height: 28px; padding: 0; color: #a95849; background: transparent; cursor: help; }
 .host-drag-handle { width: 27px; height: 28px; border: 0; border-radius: 4px; padding: 0; background: transparent; color: #99a79f; cursor: grab; }
@@ -44,7 +43,6 @@
 .host-error-popover strong { display: block; font-size: 11px; margin-bottom: 5px; color: #a25747; }
 .host-error-popover p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .host-order-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.host-refresh-bar { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; margin-bottom: 12px; background: #eef5f0; color: #5a7563; border-radius: 5px; font-size: 12px; }
 .host-modal { width: 580px; }
 .host-modal.wide { width: min(940px, calc(100vw - 48px)); height: min(690px, calc(100vh - 48px)); }
 .host-modal .modal-heading, .host-modal .modal-footer, .host-detail-tabs { flex-shrink: 0; }
@@ -141,7 +139,7 @@
 .host-ungrouped-label { padding-left: 22px; }
 .host-group-count { color: #7b8e81; font-size: 11px; }
 .host-group-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
-.host-group-actions .icon-button { width: 28px; height: 28px; color: #7f9487; }
+.host-group-actions .action-button { width: 30px; height: 30px; color: #7f9487; }
 .host-table tbody tr.host-group-drop { background: #e4f2e8; box-shadow: inset 0 0 0 2px #258569; }
 .host-table .host-tree-host { padding-left: 28px; }
 .host-tree-host .host-entry { position: relative; }

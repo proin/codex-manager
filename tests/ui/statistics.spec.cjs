@@ -140,10 +140,10 @@ test('새로 조회한 통계를 표시하고 조회 실패 시 기존 기록을
   const dialog = await openDetails(page);
   await dialog.getByLabel('조회 기간', { exact: true }).selectOption('7');
   const table = dialog.getByRole('table', { name: '기간별 사용량', exact: true });
-  await dialog.getByRole('button', { name: '통계 새로 조회', exact: true }).click();
+  await dialog.getByRole('button', { name: '통계 새로고침', exact: true }).click();
   await expect(table.getByRole('cell', { name: '8.89M', exact: true })).toBeVisible();
   await page.evaluate(() => { window.statisticsRefreshError = true; });
-  await dialog.getByRole('button', { name: '통계 새로 조회', exact: true }).click();
+  await dialog.getByRole('button', { name: '통계 새로고침', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('통계를 조회하지 못했습니다.');
   await expect(table.getByRole('cell', { name: '8.89M', exact: true })).toBeVisible();
   expect(await page.evaluate(() => window.statisticsCalls)).toEqual([

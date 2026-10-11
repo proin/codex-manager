@@ -1,6 +1,7 @@
 'use strict';
 
 const { SshConfigStore } = require('./ssh-config.cjs');
+const { sshExecutable } = require('./local-commands.cjs');
 const { LocalKeyStore } = require('./local-keys.cjs');
 const crypto = require('node:crypto');
 const { SSH_OPTIONS, PROBE_TIMEOUT_MS, assertAlias, buildSshArgs, runProcess, commandError, withAskpass, parseEffectiveConfig, parseAuthorizedKeys, registrationScript, probeCodex, secureProxyCommand, upgradeScript } = require('./host-ssh.cjs');
@@ -224,7 +225,7 @@ class HostService {
     if (host.connectable === false) return { hostName: host.hostName, user: host.user, port: host.port, identityFile: host.identityFile, proxyJump: host.proxyJump };
     assertAlias(host.alias);
     const args = ['-F', this.state.configPath, '-G', ...Object.entries(SSH_OPTIONS).flatMap(([key, value]) => ['-o', `${key}=${value}`]), '--', host.alias];
-    const result = await this.run('ssh', args, { timeoutMs: 5000, signal });
+    const result = await this.run(sshExecutable(), args, { timeoutMs: 5000, signal });
     if (result.code !== 0) throw commandError(result);
     return parseEffectiveConfig(result.stdout);
   }
@@ -293,7 +294,7 @@ class HostService {
     const key = await this.selectedKey(host, signal);
     const proxyCommand = await secureProxyCommand(this.run, this.state.configPath, host, { password: Boolean(password), signal });
     return this.askpass(password, async (env) => {
-      const result = await this.run('ssh', buildSshArgs(this.state.configPath, host, command, { password: Boolean(password), identityFile: key.privateExists ? key.privateKeyPath : undefined, proxyCommand }), { signal, input, timeoutMs, env });
+      const result = await this.run(sshExecutable(), buildSshArgs(this.state.configPath, host, command, { password: Boolean(password), identityFile: key.privateExists ? key.privateKeyPath : undefined, proxyCommand }), { signal, input, timeoutMs, env });
       if (result.code !== 0) throw commandError(result, mutation);
       return result;
     });

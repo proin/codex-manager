@@ -1,0 +1,26 @@
+.markdown-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; color: #1f2328; background: #fff; }
+.markdown-viewer-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid #dfe6e2; }
+.markdown-viewer-header .action-button { display: inline-flex; align-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px; padding: 0; gap: 0; flex-shrink: 0; }
+.markdown-viewer-title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.markdown-viewer-title > svg { color: #687b70; flex-shrink: 0; }
+.markdown-viewer-title h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; font-size: 13px; font-weight: 600; }
+.markdown-viewer-title > span { flex-shrink: 0; color: #7a867f; border: 1px solid #e1e7e3; border-radius: 4px; padding: 2px 6px; font-size: 10px; }
+.markdown-viewer-scroll { overflow: auto; min-height: 0; flex: 1; overscroll-behavior: contain; }
+.markdown-viewer .markdown-body { box-sizing: border-box; width: 100%; min-width: 0; max-width: 980px; margin: 0 auto; padding: 28px 36px 48px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.markdown-viewer .markdown-body table { min-width: 0; table-layout: auto; width: max-content; max-width: 100%; }
+.markdown-viewer .markdown-body th { height: auto; text-align: inherit; }
+.markdown-viewer .markdown-body td { height: auto; font-size: inherit; }
+.markdown-viewer .markdown-body small { display: inline; }
+.markdown-viewer .markdown-body code { font-size: 85%; }
+.markdown-viewer .markdown-body input[type="checkbox"] { accent-color: #0969da; cursor: default; }
+.markdown-viewer .markdown-body h1, .markdown-viewer .markdown-body h2 { display: block; }
+.markdown-viewer .markdown-body h1:focus, .markdown-viewer .markdown-body h2:focus, .markdown-viewer .markdown-body h3:focus, .markdown-viewer .markdown-body h4:focus, .markdown-viewer .markdown-body h5:focus, .markdown-viewer .markdown-body h6:focus { outline: 2px solid #0969da; outline-offset: 4px; border-radius: 2px; }
+.markdown-viewer .markdown-body a:focus-visible { outline: 2px solid #0969da; outline-offset: 3px; border-radius: 2px; }
+.markdown-viewer .markdown-body .markdown-unavailable-link { color: #656d76; text-decoration: underline dotted; cursor: default; }
+.markdown-viewer .markdown-body .markdown-image-placeholder { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 7px; max-width: 100%; padding: 8px 10px; border: 1px solid #d1d9e0; border-radius: 6px; background: #f6f8fa; color: #59636e; font-size: 12px; line-height: 1.6; vertical-align: middle; }
+.markdown-viewer .markdown-body .markdown-image-placeholder small { font-size: 10px; color: #7e8790; }
+.markdown-viewer-message { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; padding: 56px 24px; color: #6a7c70; font-size: 13px; line-height: 1.7; text-align: center; }
+.markdown-viewer-error { flex-direction: column; color: #9b4c40; }
+.markdown-viewer-message p { max-width: 600px; overflow-wrap: anywhere; }
+.markdown-viewer-link-error { margin: 10px 18px 0; padding: 9px 11px; background: #fff5f1; border: 1px solid #edd4cd; border-radius: 5px; color: #9b4c40; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 800px) { .markdown-viewer .markdown-body { padding: 20px 18px 36px; font-size: 13px; } .markdown-viewer-header { padding: 10px 12px; gap: 9px; } }

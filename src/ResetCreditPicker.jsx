@@ -1,5 +1,6 @@
 import React from 'react';
 import { RefreshCw } from 'lucide-react';
+import { ActionButton } from './ActionButton';
 import './reset-credit-picker.css';
 
 const integer = value => typeof value === 'number' && Number.isFinite(value) ? Math.round(value).toLocaleString('ko-KR') : '—';
@@ -42,7 +43,7 @@ const resetCreditDescription = credit => {
 
 export function ResetCreditPicker({ accounts, selections, pendingIds, refreshing, error, selectable, onSelect, onRefresh }) {
   return <div className="reset-credit-picker">
-    <div className="reset-picker-toolbar"><p>계정마다 사용할 초기화권 1개를 선택하십시오.</p><button className="button small" disabled={refreshing} onClick={onRefresh}><RefreshCw size={14} className={refreshing ? 'spin' : ''}/>{refreshing ? '목록 조회 중' : '목록 새로 조회'}</button></div>
+    <div className="reset-picker-toolbar"><p>계정마다 사용할 초기화권 1개를 선택하십시오.</p><ActionButton label="초기화권 목록 새로고침" icon={RefreshCw} busy={refreshing} disabled={refreshing} onClick={onRefresh}/></div>
     {error && <p className="reset-picker-error" role="alert">{error}</p>}
     {accounts.map(account => {
       const value = account.usage?.rateLimitResetCredits;

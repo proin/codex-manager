@@ -98,7 +98,7 @@ test('호스트 조회는 메뉴를 연 후 시작하고 개별 호스트만 조
   await page.goto('/');
   expect(await page.evaluate(() => window.hostCalls)).toEqual([]);
   await page.getByRole('button', { name: '호스트관리', exact: true }).click();
-  await hostRow(page, 'dev-server').getByRole('button', { name: 'dev-server 호스트 조회', exact: true }).click();
+  await hostRow(page, 'dev-server').getByRole('button', { name: 'dev-server 새로고침', exact: true }).click();
   expect(await page.evaluate(() => window.hostCalls)).toEqual([{ method: 'getState' }, { method: 'refresh', ids: ['host-1'] }]);
 });
 
@@ -147,6 +147,7 @@ test('상세 탭을 키보드로 전환하고 조회 결과를 유지하며 다�
   const dialog = page.getByRole('dialog', { name: 'dev-server 호스트 정보', exact: true });
   const infoTab = dialog.getByRole('tab', { name: '접속 정보', exact: true });
   const keyTab = dialog.getByRole('tab', { name: '키 등록', exact: true });
+  const fileTab = dialog.getByRole('tab', { name: '파일', exact: true });
   const infoPanel = dialog.getByRole('tabpanel', { name: '접속 정보', exact: true });
   const keyPanel = dialog.getByRole('tabpanel', { name: '키 등록', exact: true });
   await expect(infoTab).toHaveAttribute('aria-selected', 'true');
@@ -162,11 +163,13 @@ test('상세 탭을 키보드로 전환하고 조회 결과를 유지하며 다�
   await page.keyboard.press('Home');
   await expect(infoTab).toBeFocused();
   await page.keyboard.press('End');
+  await expect(fileTab).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
   await expect(keyTab).toBeFocused();
   await page.keyboard.press('ArrowLeft');
   await expect(infoTab).toBeFocused();
   await keyTab.click();
-  await dialog.getByRole('button', { name: '등록 상태 조회', exact: true }).click();
+  await dialog.getByRole('button', { name: '등록 상태 새로고침', exact: true }).click();
   await expect(dialog.getByRole('region', { name: '서버에 등록된 키', exact: true })).toContainText('등록된 키가 없습니다.');
   const results = dialog.getByRole('region', { name: '처리 결과', exact: true });
   const resultText = await results.textContent();
@@ -337,7 +340,7 @@ test('호스트 목록과 상세 모달의 기본 창과 좁은 창 배치', asy
   await expect(dialog.getByRole('button', { name: '닫기', exact: true }).last()).toBeVisible();
   await page.screenshot({ path: 'test-results/host-details-tabs-desktop.png', fullPage: true });
   await dialog.getByRole('tab', { name: '키 등록', exact: true }).click();
-  await dialog.getByRole('button', { name: '등록 상태 조회', exact: true }).click();
+  await dialog.getByRole('button', { name: '등록 상태 새로고침', exact: true }).click();
   await expect(dialog.getByRole('region', { name: '서버에 등록된 키', exact: true })).toContainText('이 컴퓨터');
   await expect(dialog.getByRole('region', { name: '처리 결과', exact: true })).toContainText('등록 상태 조회 완료');
   const desktopKeys = await dialog.getByRole('region', { name: '서버에 등록된 키', exact: true }).boundingBox();
@@ -356,7 +359,7 @@ test('호스트 목록과 상세 모달의 기본 창과 좁은 창 배치', asy
   await expect(dialog.getByRole('button', { name: '닫기', exact: true }).last()).toBeVisible();
   await page.screenshot({ path: 'test-results/host-details-tabs-compact.png', fullPage: true });
   await dialog.getByRole('tab', { name: '키 등록', exact: true }).click();
-  await dialog.getByRole('button', { name: '등록 상태 조회', exact: true }).click();
+  await dialog.getByRole('button', { name: '등록 상태 새로고침', exact: true }).click();
   await expect(dialog.getByRole('region', { name: '처리 결과', exact: true })).toContainText('등록 상태 조회 완료');
   await expect(dialog.getByRole('textbox', { name: '등록할 공개 키', exact: true })).toHaveValue(/ssh-ed25519/);
   const compactKeys = await dialog.getByRole('region', { name: '서버에 등록된 키', exact: true }).boundingBox();
@@ -489,4 +492,22 @@ test('키보드 위·아래 화살표로 호스트 순서를 바꾸고 포커스
   ]);
   expect(await page.evaluate(() => window.hostCalls.filter(call => call.method === 'details'))).toEqual([]);
   await expect(page.getByRole('dialog')).toBeHidden();
+});
+
+
+test('호스트 작업은 같은 크기의 아이콘을 사용하고 마우스·키보드로 설명을 표시', async ({ page }) => {
+  await installMock(page); await openHosts(page);
+  const actions = hostRow(page, 'dev-server').locator('.host-row-actions > button');
+  await expect(actions).toHaveCount(5);
+  const dimensions = await actions.evaluateAll(buttons => buttons.map(button => ({ text: button.textContent.trim(), label: button.getAttribute('aria-label'), width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height })));
+  expect(dimensions.every(button => !button.text && button.label && button.width === 30 && button.height === 30)).toBe(true);
+  const file = hostRow(page, 'dev-server').getByRole('button', { name: 'dev-server 파일 관리', exact: true });
+  await file.hover(); await expect(page.locator('.action-tooltip')).toHaveText('파일 관리');
+  await page.getByRole('heading', { name: '호스트관리', exact: true }).hover(); await expect(page.locator('.action-tooltip')).toBeHidden();
+  await file.focus(); await expect(page.locator('.action-tooltip')).toHaveText('파일 관리');
+  await expect(file).toHaveAttribute('aria-describedby', await page.locator('.action-tooltip').getAttribute('id'));
+  await file.press('Escape'); await expect(page.locator('.action-tooltip')).toBeHidden(); await expect(file).toBeFocused();
+  const upgrade = hostRow(page, 'dev-server').getByRole('button', { name: '업그레이드', exact: true });
+  await upgrade.click(); await expect(page.getByRole('alertdialog', { name: 'Codex 업그레이드', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.hostCalls.filter(call => call.method === 'upgrade'))).toEqual([]);
 });

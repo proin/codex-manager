@@ -3,6 +3,7 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
+const { keygenExecutable } = require('./local-commands.cjs')
 
 async function present(filePath) {
   try { await fs.lstat(filePath); return true } catch (error) { if (error.code === 'ENOENT') return false; throw error }
@@ -10,7 +11,7 @@ async function present(filePath) {
 
 function runKeygen(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('ssh-keygen', args, {
+    const child = spawn(keygenExecutable(), args, {
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       env: { ...process.env, SSH_ASKPASS_REQUIRE: 'never', DISPLAY: '' },
     })

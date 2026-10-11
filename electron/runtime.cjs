@@ -7,6 +7,7 @@ const path = require('node:path');
 const { createRequire } = require('node:module');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { macExecutableArchitectures } = require('./native-architecture.cjs');
 
 const runFile = promisify(execFile);
 
@@ -122,24 +123,49 @@ function createRuntimeFinder(options = {}) {
   const arch = options.arch || process.arch;
   const home = options.home || os.homedir();
   const env = options.env || process.env;
-  const target = platformTarget(platform, arch);
   const execute = options.execute || runFile;
+  const detectAppleSilicon = options.detectAppleSilicon || (async () => {
+    try {
+      const { stdout } = await runFile('/usr/sbin/sysctl', ['-n', 'hw.optional.arm64'], { timeout: 2000, maxBuffer: 1024, shell: false });
+      return String(stdout).trim() === '1';
+    } catch { return false; }
+  });
+  let hostArch;
   return async function findRuntime(customPath = '') {
     const custom = typeof customPath === 'string' ? customPath.trim() : '';
     if (customPath && !custom) return unavailable('Codex 실행 파일 경로가 올바르지 않습니다.');
     const expanded = custom.startsWith('~/') ? path.join(home, custom.slice(2)) : custom;
     if (custom && !path.isAbsolute(expanded)) return unavailable('Codex 실행 파일의 전체 경로를 입력해 주십시오.');
+    // An Intel build of the manager can also run on Apple Silicon through Rosetta.
+    // Select the hardware's native Codex package in that case.
+    hostArch ||= platform === 'darwin' && arch === 'x64'
+      ? Promise.resolve().then(detectAppleSilicon).then((nativeArm64) => nativeArm64 ? 'arm64' : arch)
+      : Promise.resolve(arch);
+    const nativeArch = await hostArch;
+    const target = platformTarget(platform, nativeArch);
     const candidates = custom ? [expanded] : options.candidates || defaultCandidates({
       home, env, platform, target, resourcesPath: options.resourcesPath || process.resourcesPath,
     });
     const visited = new Set();
     let lastError;
+    let architectureError;
     for (const candidate of candidates) {
       try {
         const command = await resolveNative(candidate, target);
         if (visited.has(command)) continue;
         visited.add(command);
-        const { stdout } = await execute(command, ['--version'], {
+        if (platform === 'darwin' && nativeArch === 'arm64') {
+          const architectures = await macExecutableArchitectures(command);
+          if (!architectures.includes('arm64')) {
+            throw Object.assign(new Error('Codex 실행 파일이 Apple Silicon을 지원하지 않습니다. Apple Silicon용 Codex CLI를 설치하거나 선택해 주십시오.'), { code: 'CODEX_ARCHITECTURE' });
+          }
+        }
+        // Universal executables can inherit an Intel parent's architecture.
+        // The same launch command is reused for version checks and app-server.
+        const forceArm64 = platform === 'darwin' && nativeArch === 'arm64' && arch === 'x64';
+        const launchCommand = forceArm64 ? '/usr/bin/arch' : command;
+        const launchArgs = forceArm64 ? ['-arm64', command] : [];
+        const { stdout } = await execute(launchCommand, [...launchArgs, '--version'], {
           timeout: options.timeout || 5000,
           maxBuffer: 64 * 1024,
           windowsHide: true,
@@ -148,9 +174,10 @@ function createRuntimeFinder(options = {}) {
         });
         const version = /^codex-cli\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\s*$/m.exec(String(stdout).trim())?.[1];
         if (!version) throw new Error('선택한 파일은 Codex CLI가 아닙니다.');
-        return { available: true, path: command, version, command, args: [] };
+        return { available: true, path: command, version, command: launchCommand, args: launchArgs };
       } catch (error) {
         lastError = error;
+        if (error.code === 'CODEX_ARCHITECTURE') architectureError = error;
       }
     }
     if (custom) {
@@ -161,6 +188,7 @@ function createRuntimeFinder(options = {}) {
               ? lastError.message : '선택한 Codex 실행 파일을 실행할 수 없습니다.';
       return unavailable(message);
     }
+    if (architectureError) return unavailable(architectureError.message);
     return unavailable('Codex CLI를 찾을 수 없습니다. 설치하거나 실행 파일을 선택해 주십시오.');
   };
 }

@@ -19,6 +19,58 @@ export function createDemoHostBridge() {
     return host;
   };
   const pause = (delay = 180) => new Promise(resolve => setTimeout(resolve, delay));
+  const fileListeners = new Set(), transfers = [], fileStores = new Map();
+  const fileHome = '/home/demo';
+  const fileSnapshot = () => structuredClone(transfers);
+  const emitFiles = () => { const result = fileSnapshot(); fileListeners.forEach(callback => callback(result)); return result; };
+  const basename = path => path.slice(path.lastIndexOf('/') + 1);
+  const parent = path => path.slice(0, path.lastIndexOf('/')) || '/';
+  const demoMarkdown = '# 서버 파일\n\n서버의 파일과 폴더를 관리합니다.\n\n## 파일 관리\n\n| 작업 | 설명 |\n| --- | --- |\n| 업로드 | 이 컴퓨터의 파일을 서버에 복사 |\n| 다운로드 | 서버의 파일을 이 컴퓨터에 저장 |\n| 이동 | 다른 폴더로 이동 |\n\n- [x] 폴더 탐색\n- [x] 마크다운 미리보기\n\n```sh\nls -la\n```\n\n> 문서는 읽기 전용으로 표시됩니다.\n\n[프로젝트 안내](projects/guide.markdown)\n';
+  const fileEntry = (path, type, size = 0) => ({ name: basename(path), path, type, size, modifiedAt: currentTime, mode: type === 'directory' ? '755' : '644' });
+  const fileStore = id => {
+    const host = getHost(id);
+    if (host.connectable === false) throw new Error('공통 설정에서는 파일에 접근할 수 없습니다.');
+    if (!fileStores.has(id)) fileStores.set(id, new Map([
+      fileEntry('/', 'directory'), fileEntry('/home', 'directory'), fileEntry(fileHome, 'directory'),
+      fileEntry(`${fileHome}/projects`, 'directory'), fileEntry(`${fileHome}/logs`, 'directory'),
+      { ...fileEntry(`${fileHome}/README.md`, 'file', new TextEncoder().encode(demoMarkdown).length), content: demoMarkdown }, fileEntry(`${fileHome}/.profile`, 'file', 560),
+      { ...fileEntry(`${fileHome}/projects/guide.markdown`, 'file', 512), content: '# 프로젝트 안내\n\n프로젝트 파일은 이 폴더에서 관리합니다.\n\n[파일 관리 안내](../README.md)\n' },
+      fileEntry(`${fileHome}/projects/codex-manager`, 'directory'), fileEntry(`${fileHome}/projects/server.js`, 'file', 3072),
+      fileEntry(`${fileHome}/logs/app.log`, 'file', 32768),
+    ].map(entry => [entry.path, entry])));
+    return fileStores.get(id);
+  };
+  const fileList = (id, path = fileHome) => {
+    const store = fileStore(id), target = path || fileHome;
+    if (store.get(target)?.type !== 'directory') throw new Error('폴더를 찾을 수 없습니다. (예시)');
+    return { path: target, home: fileHome, entries: structuredClone([...store.values()].filter(entry => entry.path !== target && parent(entry.path) === target)) };
+  };
+  const relocate = (id, paths, targetDirectory, explicitTarget) => {
+    const store = fileStore(id), moves = paths.map(path => [path, explicitTarget || `${targetDirectory === '/' ? '' : targetDirectory}/${basename(path)}`]);
+    for (const [source, target] of moves) {
+      if (!store.has(source) || source === '/') throw new Error('파일을 찾을 수 없습니다. (예시)');
+      if (store.has(target) || target.startsWith(`${source}/`)) throw new Error('같은 이름이 있거나 폴더 내부로 이동할 수 없습니다. (예시)');
+      if (store.get(parent(target))?.type !== 'directory') throw new Error('이동할 폴더를 찾을 수 없습니다. (예시)');
+    }
+    for (const [source, target] of moves) for (const entry of [...store.values()]) {
+      if (entry.path === source || entry.path.startsWith(`${source}/`)) { store.delete(entry.path); const path = `${target}${entry.path.slice(source.length)}`; store.set(path, { ...entry, path, name: basename(path) }); }
+    }
+    return { success: true };
+  };
+  const transfer = async (id, direction, paths, directory) => {
+    fileStore(id);
+    const item = { id: crypto.randomUUID(), hostId: id, direction, status: 'running', completedBytes: 0, totalBytes: 1024 * 256, currentFile: paths[0], message: '예시 파일 전송' };
+    transfers.push(item); emitFiles();
+    for (let index = 1; index <= 4; index++) {
+      await pause(280); if (item.status === 'canceled') return fileSnapshot();
+      item.completedBytes = item.totalBytes * index / 4; emitFiles();
+    }
+    if (direction === 'upload') {
+      const store = fileStore(id), path = `${directory}/uploaded-${transfers.length}${paths[0] === 'example-folder' ? '' : '.txt'}`;
+      store.set(path, fileEntry(path, paths[0] === 'example-folder' ? 'directory' : 'file', item.totalBytes));
+    }
+    item.status = 'completed'; return emitFiles();
+  };
   const keysFor = id => registered.has(id) ? [{ id: 'example-key', keyType: 'ssh-ed25519', comment: 'example@computer', fingerprint: key.fingerprint, matchesLocal: true }] : [];
   const revision = () => { state.revision = crypto.randomUUID(); };
   const isBusy = (host, batchHostId) => (state.batchUpgrade.running && state.batchUpgrade.hostIds.includes(host.id) && host.id !== batchHostId) || host.operation?.running || ['starting', 'waiting', 'verifying'].includes(host.login?.status) || ['checking', 'loading', 'connecting'].includes(host.connection?.status);
@@ -42,6 +94,23 @@ export function createDemoHostBridge() {
   };
   return {
     getState: async () => snapshot(), onState: callback => { listeners.add(callback); return () => listeners.delete(callback); },
+    openSshTerminal: async id => { getHost(id); throw new Error('예시 화면에서는 외부 터미널을 열지 않습니다.'); },
+    listFiles: async (id, path) => fileList(id, path),
+    readTextFile: async (id, path) => {
+      const entry = fileStore(id).get(path);
+      if (!entry || entry.type !== 'file' || !/\.(?:md|markdown)$/i.test(path)) throw new Error('마크다운 파일을 찾을 수 없습니다. (예시)');
+      return { hostId: id, path, name: entry.name, content: entry.content || '# 예시 문서\n', size: entry.size, modifiedAt: entry.modifiedAt };
+    },
+    openFileLink: async () => { throw new Error('예시 화면에서는 외부 링크를 열지 않습니다.'); },
+    createDirectory: async (id, path) => { const store = fileStore(id); if (store.has(path)) throw new Error('같은 이름의 파일이나 폴더가 있습니다. (예시)'); if (store.get(parent(path))?.type !== 'directory') throw new Error('상위 폴더를 찾을 수 없습니다. (예시)'); store.set(path, fileEntry(path, 'directory')); return { success: true }; },
+    renameFile: async (id, source, target) => relocate(id, [source], parent(target), target),
+    moveFiles: async (id, paths, targetDirectory) => relocate(id, paths, targetDirectory),
+    deleteFiles: async (id, paths) => { const store = fileStore(id); paths.forEach(path => { for (const entry of [...store.values()]) if (entry.path === path || entry.path.startsWith(`${path}/`)) store.delete(entry.path); }); return { success: true }; },
+    uploadFiles: async (id, directory, options) => transfer(id, 'upload', [options?.directory ? 'example-folder' : 'example.txt'], directory),
+    downloadFiles: async (id, paths) => transfer(id, 'download', paths),
+    getFileTransfers: async () => fileSnapshot(),
+    onFileTransfers: callback => { fileListeners.add(callback); return () => fileListeners.delete(callback); },
+    cancelFileTransfer: async transferId => { const item = transfers.find(item => item.id === transferId); if (item?.status === 'running') item.status = 'canceled'; return emitFiles(); },
     reloadHosts: async () => emit(),
     saveHost: async (draft, expectedRevision) => {
       if (expectedRevision !== state.revision) throw new Error('SSH 설정이 변경되었습니다. 목록을 새로고침한 후 다시 저장하십시오.');

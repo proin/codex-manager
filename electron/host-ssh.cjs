@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const { sshExecutable } = require('./local-commands.cjs');
 
 const OUTPUT_LIMIT = 256 * 1024;
 const PROBE_TIMEOUT_MS = 15000;
@@ -219,7 +220,7 @@ function remoteShell(script) { return `exec "\${SHELL:-/bin/sh}" -lc ${shellQuot
 async function probeCodex(run, configPath, host, options = {}) {
   let metadata = null; let buffer = ''; let account = null; let accountError = false; let accountRead = false;
   const command = remoteShell(`${DISCOVER_SCRIPT}\nexec "$codex_bin" app-server\n`);
-  const result = await run('ssh', buildSshArgs(configPath, host, command, options), {
+  const result = await run(sshExecutable(options.platform), buildSshArgs(configPath, host, command, options), {
     signal: options.signal, timeoutMs: options.timeoutMs || PROBE_TIMEOUT_MS,
     onStart: (child) => child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codex_account_manager', title: 'Codex Account Manager', version: APP_VERSION } } })}\n`),
     onStdout: (chunk, child, finish) => {
@@ -264,7 +265,7 @@ async function secureProxyCommand(run, configPath, host, { password = false, sig
   const resolve = async (alias, overrides = [], seen = []) => {
     assertAlias(alias);
     if (seen.includes(alias) || seen.length >= 8) throw new Error('중간 접속 호스트 설정을 확인하십시오.');
-    const result = await run('ssh', ['-F', configPath, '-G', ...overrides, '--', alias], { signal, timeoutMs: 5000 });
+    const result = await run(sshExecutable(platform), ['-F', configPath, '-G', ...overrides, '--', alias], { signal, timeoutMs: 5000 });
     if (result.code !== 0) throw commandError(result);
     const effective = parseEffectiveConfig(result.stdout);
     if (!effective.proxyJump) return null;
@@ -278,7 +279,7 @@ async function secureProxyCommand(run, configPath, host, { password = false, sig
       const jumpOverrides = [...(match[1] ? ['-l', match[1]] : []), ...(match[3] ? ['-p', match[3]] : [])];
       const nested = previous || await resolve(jumpAlias, jumpOverrides, [...seen, alias]);
       const args = ['-F', configPath, '-T', ...Object.entries(common).flatMap(([key, value]) => ['-o', `${key}=${value}`]), ...(nested ? ['-o', `ProxyCommand=${nested.replace(/%/g, '%%')}`] : []), ...jumpOverrides, '-W', '[%h]:%p', '--', jumpAlias];
-      previous = [platform === 'win32' ? 'ssh.exe' : 'ssh', ...args].map((value) => localCommandQuote(value, platform)).join(' ');
+      previous = [platform === 'win32' ? 'ssh.exe' : sshExecutable(platform), ...args].map((value) => localCommandQuote(value, platform)).join(' ');
     }
     return previous;
   };

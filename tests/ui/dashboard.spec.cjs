@@ -154,9 +154,9 @@ test('기기 코드 로그인과 취소, 이름 변경과 삭제', async ({ page
 test('전체 조회 진행 표시와 화면 크기 점검', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/?demo=1');
-  await page.getByRole('button', { name: '전체 조회', exact: true }).click();
-  await expect(page.getByRole('button', { name: /조회 중/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: '전체 조회', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await expect(page.getByRole('button', { name: '새로고침', exact: true })).toHaveAttribute('aria-busy', 'true');
+  await expect(page.getByRole('button', { name: '새로고침', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: 'test-results/accounts-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 960, height: 800 });
@@ -190,6 +190,19 @@ test('불명확한 결과도 알림 이후 처리하고 완료한 작업은 사�
   await page.getByRole('button', { name: '결과 다시 확인', exact: true }).click();
   await dialog.getByRole('button', { name: '계속', exact: true }).click();
   await expect(dialog).toBeHidden();
-  await page.getByRole('button', { name: '사용량 다시 조회', exact: true }).click();
+  await page.getByRole('button', { name: '사용량 새로고침', exact: true }).click();
   expect(await page.evaluate(() => window.operationCalls)).toEqual([{ method: 'reset', ids: ['retry'] }, { method: 'refresh', ids: ['finished'] }]);
+});
+
+
+test('계정 작업과 새로고침은 아이콘으로 표시하고 초기화권 확인 절차를 유지', async ({ page }) => {
+  await page.goto('/?demo=1');
+  const personal = accountRow(page, '개인 계정'); await expect(personal).toBeVisible();
+  const refresh = page.getByRole('button', { name: '새로고침', exact: true });
+  await expect(refresh).toHaveText(''); await expect(page.getByRole('button', { name: '계정 추가', exact: true })).toHaveText('');
+  const reset = personal.getByRole('button', { name: '초기화권 사용', exact: true });
+  await expect(reset).toHaveText(''); await reset.focus(); await expect(page.locator('.action-tooltip')).toHaveText('초기화권 사용');
+  await reset.press('Enter'); await expect(page.getByRole('dialog', { name: '초기화권 목록', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '초기화권 목록 새로고침', exact: true })).toHaveText('');
+  await expect(personal.locator('.credit-value b')).toHaveText('2');
 });

@@ -5,6 +5,9 @@ const { pathToFileURL } = require('node:url');
 const { AccountService, validateResetSelections } = require('./account-service.cjs');
 const { findRuntime } = require('./runtime.cjs');
 const { HostService } = require('./host-service.cjs');
+const { HostFileService } = require('./host-files.cjs');
+const { createHostFileHandlers } = require('./host-file-handlers.cjs');
+const { openSshTerminal } = require('./host-terminal.cjs');
 
 app.setName('Codex Account Manager');
 if (process.env.CODEX_MANAGER_DATA_DIR) app.setPath('userData', path.resolve(process.env.CODEX_MANAGER_DATA_DIR));
@@ -13,6 +16,7 @@ if (!hasLock) app.quit();
 let mainWindow;
 let service;
 let hostService;
+let fileService;
 let runtime;
 let quitting = false;
 let changingRuntime = false;
@@ -30,6 +34,9 @@ function publish() {
 }
 function publishHosts() {
   if (mainWindow && !mainWindow.isDestroyed() && hostService) mainWindow.webContents.send('hosts:state', hostService.snapshot());
+}
+function publishFileTransfers(transfers) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('hosts:fileTransfers', transfers);
 }
 function trusted(event) {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error('허용되지 않은 요청입니다.');
@@ -127,6 +134,7 @@ function registerHandlers() {
     });
   }
   const hostMethods = {
+    ...createHostFileHandlers({ fileService, hostService, dialog, shell, getWindow: () => mainWindow }),
     getState: () => hostService.snapshot(),
     reloadHosts: () => hostService.reloadHosts(),
     saveHost: (draft, revision) => hostService.saveHost(draft, revision),
@@ -149,6 +157,12 @@ function registerHandlers() {
     cancelCodexLogin: id => hostService.cancelCodexLogin(id),
     openCodexLogin,
     copyCodexLoginCode,
+    openSshTerminal: async id => {
+      const host = hostService.requireHost(id, true);
+      const current = await hostService.config.read();
+      if (current.revision !== hostService.state.revision) throw new Error('SSH 설정이 변경되었습니다. 목록을 새로고침한 뒤 접속하십시오.');
+      return openSshTerminal({ host: { ...host }, configPath: hostService.state.configPath, shell });
+    },
   };
   for (const [method, handler] of Object.entries(hostMethods)) {
     ipcMain.handle(`hosts:${method}`, async (event, ...args) => {
@@ -177,7 +191,7 @@ app.on('before-quit', event => {
   if (quitting || !service) return;
   event.preventDefault();
   quitting = true;
-  Promise.allSettled([service.close(), hostService?.close()]).finally(() => app.quit());
+  Promise.allSettled([service.close(), fileService?.close(), hostService?.close()]).finally(() => app.quit());
 });
 if (hasLock) app.whenReady().then(async () => {
   await fs.mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -188,6 +202,7 @@ if (hasLock) app.whenReady().then(async () => {
   const configPath = process.env.CODEX_MANAGER_SSH_CONFIG ? path.resolve(process.env.CODEX_MANAGER_SSH_CONFIG) : undefined;
   hostService = new HostService({ configPath, sshDir: configPath ? path.dirname(configPath) : undefined, onChange: publishHosts });
   await hostService.init();
+  fileService = new HostFileService({ hostService, onChange: publishFileTransfers });
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   Menu.setApplicationMenu(Menu.buildFromTemplate([

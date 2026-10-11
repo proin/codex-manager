@@ -183,6 +183,9 @@ test('새로고침은 목록을 먼저 읽고 최신 호스트를 한 번 조회
   await expect(page.getByRole('button', { name: '전체 조회', exact: true })).toBeHidden();
   await refreshButton(page).evaluate(button => { button.click(); button.click(); });
   await expect(refreshButton(page)).toBeDisabled();
+  await expect(refreshButton(page)).toHaveAttribute('aria-busy', 'true');
+  await expect(refreshButton(page)).toHaveText('');
+  await expect(refreshButton(page).locator('.lucide-refresh-cw.spin')).toBeVisible();
   expect(await page.evaluate(() => window.hostBulkCalls)).toEqual([{ method: 'reload' }]);
   await refreshButton(page).evaluate(button => button.click());
   expect(await page.evaluate(() => window.hostBulkCalls)).toEqual([{ method: 'reload' }]);
@@ -270,7 +273,7 @@ test('선택 업그레이드는 확인 후 모두 시작하고 전체 완료까�
   expect(await page.evaluate(() => window.hostBulkCalls.filter(call => call.method === 'upgradeBatch'))).toEqual([]);
   await selectedUpgrade(page).click(); dialog = upgradeDialog(page);
   await dialog.getByRole('button', { name: '업그레이드', exact: true }).click(); await expect(dialog).toBeHidden();
-  await expect(hostRow(page, 'dev-server')).toContainText('업그레이드 중'); await expect(hostRow(page, 'prod-server')).toContainText('업그레이드 중');
+  await expect(hostRow(page, 'dev-server').getByRole('button', { name: '업그레이드', exact: true })).toHaveAttribute('aria-busy', 'true'); await expect(hostRow(page, 'prod-server').getByRole('button', { name: '업그레이드', exact: true })).toHaveAttribute('aria-busy', 'true');
   await expect(selectedUpgrade(page)).toBeDisabled(); await expect(selectedDelete(page)).toBeDisabled();
   await expect(hostRow(page, 'dev-server').getByRole('button', { name: /^업그레이드(?: 중)?$/ })).toBeDisabled();
   await expect(hostRow(page, 'prod-server').getByRole('button', { name: '계정 전환', exact: true })).toBeDisabled();
@@ -436,7 +439,7 @@ test('일괄 작업 중 메뉴를 다시 열어도 완료 호스트의 잠금과
   const completed = hostRow(page, 'dev-server');
   await expect(completed.getByRole('button', { name: '업그레이드', exact: true })).toBeDisabled();
   await expect(completed.getByRole('button', { name: '계정 전환', exact: true })).toBeDisabled();
-  await expect(completed.getByRole('button', { name: 'dev-server 호스트 조회', exact: true })).toBeDisabled();
+  await expect(completed.getByRole('button', { name: 'dev-server 새로고침', exact: true })).toBeDisabled();
   await expect(completed.locator('.spin')).toHaveCount(0);
   await expect(hostRow(page, 'gpu-server').getByRole('button', { name: '업그레이드', exact: true })).toBeEnabled();
   await selection(page, 'dev-server').check();

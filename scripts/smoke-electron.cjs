@@ -66,6 +66,26 @@ const assert = require('node:assert/strict');
     const hostAdded = await page.evaluate(({ revision, identityFile }) => window.hostManager.saveHost({ alias: 'isolated-test', hostName: '192.0.2.1', user: 'test', port: '22', identityFile }, revision), { revision: hostInitial.revision, identityFile: path.join(dataDir, 'ssh', 'id_isolated_test') });
     assert.equal(hostAdded.hosts.length, 1);
     assert.equal(hostAdded.hosts[0].alias, 'isolated-test');
+    const fileMethods = await page.evaluate(() => ['openSshTerminal', 'listFiles', 'readTextFile', 'openFileLink', 'createDirectory', 'renameFile', 'moveFiles', 'deleteFiles', 'uploadFiles', 'downloadFiles', 'getFileTransfers', 'cancelFileTransfer', 'onFileTransfers'].every(method => typeof window.hostManager[method] === 'function'));
+    assert.equal(fileMethods, true);
+    assert.deepEqual(await page.evaluate(() => window.hostManager.getFileTransfers()), []);
+    await assert.rejects(page.evaluate(() => window.hostManager.openSshTerminal('missing-host')), /호스트/);
+    await assert.rejects(page.evaluate(() => window.hostManager.readTextFile('missing-host', '/README.md')), /호스트/);
+    await assert.rejects(page.evaluate(() => window.hostManager.openFileLink('javascript:alert(1)')), /링크 주소/);
+    await assert.rejects(page.evaluate(() => window.hostManager.listFiles('missing-host')), /호스트/);
+    await assert.rejects(page.evaluate(() => window.hostManager.uploadFiles('missing-host', '/tmp')), /호스트/);
+    await application.evaluate(({ dialog }) => {
+      globalThis.savedFilePicker = dialog.showOpenDialog;
+      dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] });
+    });
+    try {
+      assert.deepEqual(await page.evaluate(id => window.hostManager.uploadFiles(id, '/tmp'), hostAdded.hosts[0].id), { canceled: true });
+      assert.deepEqual(await page.evaluate(id => window.hostManager.uploadFiles(id, '/tmp', { directory: true }), hostAdded.hosts[0].id), { canceled: true });
+      assert.deepEqual(await page.evaluate(id => window.hostManager.downloadFiles(id, ['/tmp/example']), hostAdded.hosts[0].id), { canceled: true });
+      assert.deepEqual(await page.evaluate(() => window.hostManager.getFileTransfers()), []);
+    } finally {
+      await application.evaluate(({ dialog }) => { dialog.showOpenDialog = globalThis.savedFilePicker; delete globalThis.savedFilePicker; });
+    }
     await assert.rejects(page.evaluate(id => window.hostManager.openCodexLogin(id), hostAdded.hosts[0].id), /로그인/);
     await assert.rejects(page.evaluate(id => window.hostManager.copyCodexLoginCode(id), hostAdded.hosts[0].id), /로그인/);
     await page.getByRole('button', { name: 'isolated-test 호스트 정보', exact: true }).click();
@@ -78,6 +98,23 @@ const assert = require('node:assert/strict');
     await hostDialog.getByRole('region', { name: '서버에 등록된 키', exact: true }).waitFor();
     await hostDialog.getByRole('region', { name: '처리 결과', exact: true }).waitFor();
     await hostDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+    await application.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('hosts:listFiles');
+      ipcMain.removeHandler('hosts:readTextFile');
+      ipcMain.handle('hosts:listFiles', (_event, hostId) => ({ hostId, path: '/example', home: '/example', entries: [{ name: 'README.md', path: '/example/README.md', type: 'file', size: 128, modifiedAt: '2026-10-10T14:30:00Z' }] }));
+      ipcMain.handle('hosts:readTextFile', (_event, hostId, remotePath) => ({ hostId, path: remotePath, name: 'README.md', size: 128, content: '# 파일 안내\n\n| 이름 | 상태 |\n| --- | --- |\n| 미리보기 | 완료 |\n', modifiedAt: '2026-10-10T14:30:00Z' }));
+    });
+    await page.getByRole('button', { name: 'isolated-test 파일 관리', exact: true }).click();
+    assert.equal(await page.getByRole('dialog').count(), 0);
+    await page.getByRole('complementary', { name: '파일 정보', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'README.md 파일 선택', exact: true }).dblclick();
+    const markdown = page.getByRole('article', { name: '마크다운 문서', exact: true });
+    await markdown.getByRole('heading', { name: '파일 안내', exact: true }).waitFor();
+    assert.match(await markdown.getByRole('table').innerText(), /미리보기/);
+    await page.getByRole('button', { name: '파일 목록', exact: true }).click();
+    await page.getByRole('table', { name: '원격 파일 목록', exact: true }).waitFor();
+    await page.getByRole('button', { name: '호스트 목록으로 돌아가기', exact: true }).click();
+    await page.getByRole('table', { name: '호스트 목록', exact: true }).waitFor();
     const twoHosts = await page.evaluate(({ revision, identityFile }) => window.hostManager.saveHost({ alias: 'isolated-second', hostName: '192.0.2.2', user: 'test', identityFile }, revision), { revision: hostAdded.revision, identityFile: path.join(dataDir, 'ssh', 'id_isolated_second') });
     const second = twoHosts.hosts.find(host => host.alias === 'isolated-second');
     const firstRow = page.getByRole('table', { name: '호스트 목록', exact: true }).locator('tbody > tr').filter({ has: page.getByRole('button', { name: 'isolated-test 호스트 정보', exact: true }) });

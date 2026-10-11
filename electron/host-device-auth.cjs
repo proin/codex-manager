@@ -3,6 +3,7 @@
 const { version: APP_VERSION } = require('../package.json');
 
 const { DISCOVER_SCRIPT, remoteShell, buildSshArgs, commandError } = require('./host-ssh.cjs');
+const { sshExecutable } = require('./local-commands.cjs');
 
 const DEVICE_AUTH_TIMEOUT_MS = 15 * 60 * 1000;
 const LOGIN_HOSTS = new Set(['auth.openai.com', 'auth0.openai.com', 'chatgpt.com']);
@@ -63,7 +64,7 @@ async function loginCodexOnHost(run, configPath, host, options = {}) {
   if (options.signal?.aborted) canceled();
   let result;
   try {
-    result = await run('ssh', buildSshArgs(configPath, host, remoteShell(`${DISCOVER_SCRIPT}\nexec "$codex_bin" app-server\n`), options), {
+    result = await run(sshExecutable(options.platform), buildSshArgs(configPath, host, remoteShell(`${DISCOVER_SCRIPT}\nexec "$codex_bin" app-server\n`), options), {
       signal: controller.signal, timeoutMs: timeoutMs + 1000,
       // Do not retain protocol replies or Codex logs in process output.
       captureOutput: false,

@@ -44,6 +44,23 @@ test('generating a key produces a usable pair without replacing it on later call
   assert.ok(!Object.hasOwn(state, 'privateKey'))
 })
 
+test('macOS key generation and fingerprints ignore another ssh-keygen in PATH', async t => {
+  if (process.platform !== 'darwin') { t.skip('Uses the macOS system key generator.'); return }
+  const { root, keys } = await fixture(t)
+  const executableDir = path.join(root, 'fake executables')
+  const marker = path.join(root, 'wrong-keygen-used')
+  await fs.mkdir(executableDir)
+  await fs.writeFile(path.join(executableDir, 'ssh-keygen'), `#!/bin/sh\nprintf wrong > '${marker.replace(/'/g, `'"'"'`)}'\nexit 1\n`, { mode: 0o700 })
+  const previousPath = process.env.PATH
+  process.env.PATH = `${executableDir}:/usr/bin:/bin`
+  t.after(() => { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath })
+  const created = await keys.generate()
+  assert.match(created.publicKey, /^ssh-ed25519 /)
+  assert.match(created.fingerprint, /SHA256:/)
+  assert.equal((await keys.status()).fingerprint, created.fingerprint)
+  await assert.rejects(fs.stat(marker), { code: 'ENOENT' })
+})
+
 test('existing id_rsa keys are reused and a missing public key is derived without modifying the private key', async t => {
   const { sshDir, keys } = await fixture(t)
   await fs.mkdir(sshDir)

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
+import { ActionButton } from './ActionButton';
 import './account-details.css';
 
 const DAY = 86400000;
@@ -170,7 +171,7 @@ export function AccountDetails({ account, bridge }) {
   }, [details?.snapshots, days, chosenWindow?.key]);
 
   return <div className="account-details" aria-busy={refreshing}>
-    <div className="details-topline"><span className="details-email">{details?.email || account.email}</span><button className="button small" aria-label="통계 새로 조회" disabled={refreshing} onClick={() => read(false)}><RefreshCw size={14} className={refreshing ? 'spin' : ''}/>{refreshing ? '조회 중' : '새로 조회'}</button></div>
+    <div className="details-topline"><span className="details-email">{details?.email || account.email}</span><ActionButton label="통계 새로고침" icon={RefreshCw} busy={refreshing} disabled={refreshing} onClick={() => read(false)}/></div>
     {error && <p className="details-error" role="alert">통계를 조회하지 못했습니다. {error}</p>}
     {details?.usageError && <p className="details-error" role="alert">사용량을 조회하지 못했습니다. {details.usageError}</p>}
     {!details && refreshing ? <p className="details-empty" role="status">통계를 조회하고 있습니다.</p> : !details ? <p className="details-empty">통계 기록이 없습니다.</p> : <>

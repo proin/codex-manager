@@ -1,6 +1,8 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, ArrowUpCircle, Check, ChevronDown, ChevronRight, Copy, ExternalLink, Folder, FolderOpen, GripVertical, KeyRound, Loader2, Pencil, Plus, RefreshCw, Trash2, UserRound, X } from 'lucide-react';
+import { AlertCircle, ArrowRightLeft, ArrowUpCircle, Check, ChevronDown, ChevronRight, Copy, ExternalLink, Folder, FolderOpen, FolderPlus, GripVertical, KeyRound, Loader2, Pencil, Plus, RefreshCw, Terminal, Trash2, X } from 'lucide-react';
+import { HostFiles } from './HostFiles';
+import { ActionButton } from './ActionButton';
 import './host-manager.css';
 
 const emptyState = { configPath: '', revision: '', hosts: [], groups: [], refresh: { running: false }, batchUpgrade: { running: false, hostIds: [] } };
@@ -116,19 +118,20 @@ function HostForm({ draft, groups, onChange, onSubmit }) {
   </form>;
 }
 
-const detailTabs = [{ name: 'connection', label: '접속 정보' }, { name: 'keys', label: '키 등록' }];
-function HostTabs({ active, onChange, idPrefix }) {
+const detailTabs = [{ name: 'connection', label: '접속 정보' }, { name: 'keys', label: '키 등록' }, { name: 'files', label: '파일' }];
+function HostTabs({ active, onChange, idPrefix, filesDisabled }) {
   const move = event => {
-    const current = detailTabs.findIndex(tab => tab.name === active);
-    const next = event.key === 'ArrowRight' ? (current + 1) % detailTabs.length : event.key === 'ArrowLeft' ? (current + detailTabs.length - 1) % detailTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? detailTabs.length - 1 : null;
+    const enabledTabs = detailTabs.filter(tab => tab.name !== 'files' || !filesDisabled);
+    const current = enabledTabs.findIndex(tab => tab.name === active);
+    const next = event.key === 'ArrowRight' ? (current + 1) % enabledTabs.length : event.key === 'ArrowLeft' ? (current + enabledTabs.length - 1) % enabledTabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? enabledTabs.length - 1 : null;
     if (next == null) return;
     event.preventDefault();
-    onChange(detailTabs[next].name);
-    event.currentTarget.parentElement.querySelectorAll('[role="tab"]')[next]?.focus();
+    onChange(enabledTabs[next].name);
+    event.currentTarget.parentElement.querySelectorAll('[role="tab"]:not(:disabled)')[next]?.focus();
   };
   return <div className="host-detail-tabs" role="tablist" aria-label="호스트 상세 메뉴">
-    {detailTabs.map(tab => <button key={tab.name} type="button" role="tab" id={`${idPrefix}-${tab.name}-tab`} aria-selected={active === tab.name} aria-controls={`${idPrefix}-${tab.name}-panel`} tabIndex={active === tab.name ? 0 : -1} onClick={() => onChange(tab.name)} onKeyDown={move}>
-      {tab.name === 'keys' ? <KeyRound size={15}/> : <Pencil size={15}/>} {tab.label}
+    {detailTabs.map(tab => <button key={tab.name} type="button" role="tab" id={`${idPrefix}-${tab.name}-tab`} aria-selected={active === tab.name} aria-controls={`${idPrefix}-${tab.name}-panel`} tabIndex={active === tab.name ? 0 : -1} disabled={tab.name === 'files' && filesDisabled} onClick={() => onChange(tab.name)} onKeyDown={move}>
+      {tab.name === 'keys' ? <KeyRound size={15}/> : tab.name === 'files' ? <FolderOpen size={15}/> : <Pencil size={15}/>} {tab.label}
     </button>)}
   </div>;
 }
@@ -170,8 +173,8 @@ function HostDetails({ host, details, loading, error, keyError, keyResult, keyHi
           </div>
         </div>
         <p className="host-password-note">비밀번호는 접속에만 사용되며 저장되지 않습니다.</p>
-        <div className="host-key-buttons"><button type="button" className="button" disabled={Boolean(action) || loading || !connectable(host)} onClick={onInspect}><RefreshCw size={14} className={action === 'inspect' ? 'spin' : ''}/>{action === 'inspect' ? '조회 중' : '등록 상태 조회'}</button><button type="button" className="button primary" disabled={Boolean(action) || loading || !connectable(host) || !key?.publicExists || !key?.privateExists || !key?.publicKey?.trim()} onClick={onRegister}><KeyRound size={14}/>{action === 'register' ? '처리 중' : '미등록 시 등록'}</button></div>
-        <div className={`host-key-status-banner ${registered === true ? 'registered' : ''}`} role="status"><strong>{keyState}</strong><span>{registered === true ? '이 컴퓨터의 공개 키가 서버에 등록되어 있습니다.' : registered === false ? '이 컴퓨터의 공개 키가 서버에 등록되지 않았습니다.' : '등록 상태 조회를 누르면 서버에 등록된 키를 불러옵니다.'}</span></div>
+        <div className="host-key-buttons"><ActionButton label="등록 상태 새로고침" icon={RefreshCw} busy={action === 'inspect'} disabled={Boolean(action) || loading || !connectable(host)} onClick={onInspect}/><button type="button" className="button primary" disabled={Boolean(action) || loading || !connectable(host) || !key?.publicExists || !key?.privateExists || !key?.publicKey?.trim()} onClick={onRegister}><KeyRound size={14}/>{action === 'register' ? '처리 중' : '미등록 시 등록'}</button></div>
+        <div className={`host-key-status-banner ${registered === true ? 'registered' : ''}`} role="status"><strong>{keyState}</strong><span>{registered === true ? '이 컴퓨터의 공개 키가 서버에 등록되어 있습니다.' : registered === false ? '이 컴퓨터의 공개 키가 서버에 등록되지 않았습니다.' : '새로고침을 누르면 서버에 등록된 키를 불러옵니다.'}</span></div>
         {loading && <p className="host-loading" role="status"><Loader2 size={15} className="spin"/>키 정보 조회 중</p>}
         {error && <p className="host-inline-error" role="alert">{error}</p>}
         {keyError && <p className="host-inline-error" role="alert">{keyError}</p>}
@@ -210,6 +213,9 @@ export function HostManager({ bridge, isDemo = false }) {
   const [keyError, setKeyError] = useState('');
   const [keyHistory, setKeyHistory] = useState([]);
   const [detailTab, setDetailTab] = useState('connection');
+  const [fileHostId, setFileHostId] = useState(null);
+  const [terminalOpening, setTerminalOpening] = useState([]);
+  const terminalBusy = useRef(new Set());
   const tabsId = useId();
   const [password, setPassword] = useState('');
   const [action, setAction] = useState('');
@@ -564,6 +570,21 @@ export function HostManager({ bridge, isDemo = false }) {
     catch (error) { if (mounted.current) setLoginError(error.message || '로그인 정보를 열지 못했습니다.'); }
     finally { if (mounted.current) setAction(''); }
   };
+  const openTerminal = async target => {
+    if (!bridge?.openSshTerminal || !connectable(target) || terminalBusy.current.has(target.id)) return;
+    terminalBusy.current.add(target.id); setTerminalOpening(previous => [...previous, target.id]); setNotice('');
+    try { await bridge.openSshTerminal(target.id); }
+    catch (error) { if (mounted.current) setNotice(error.message || '터미널을 열지 못했습니다.'); }
+    finally { terminalBusy.current.delete(target.id); if (mounted.current) setTerminalOpening(previous => previous.filter(id => id !== target.id)); }
+  };
+  const openFiles = target => {
+    if (!connectable(target)) return;
+    request.current++; setModal(null); setPassword(''); setFileHostId(target.id);
+  };
+  const closeFiles = () => {
+    const id = fileHostId; setFileHostId(null);
+    requestAnimationFrame(() => document.querySelector(`.host-file-button[data-host-id="${CSS.escape(id)}"]`)?.focus());
+  };
   const renderHost = item => {
         const upgrading = ['upgrade', 'upgradeCodex'].includes(item.operation?.type) && item.operation.running;
         const failed = ['offline', 'error', 'failed'].includes(item.connection?.status);
@@ -580,7 +601,7 @@ export function HostManager({ bridge, isDemo = false }) {
           <td>{failed && item.connection?.message ? <HostErrorPopover label={`${item.alias} 접속 실패 상세`} title="접속 실패" message={item.connection.message} className={statusClass}>{status}</HostErrorPopover> : <span className={statusClass}>{status}</span>}</td>
           <td className="numeric"><strong className="host-version">{item.codex?.available === false ? '설치 없음' : text(item.codex?.version)}</strong></td>
           <td>{accountError ? <HostErrorPopover label={`${item.alias} 계정 조회 실패 상세`} title="계정 조회 실패" message={item.codex.message} className="host-account-error"><span className="host-account">{accountLabel(item)}</span><AlertCircle size={12}/></HostErrorPopover> : <span className="host-account" title={accountLabel(item)}>{accountLabel(item)}</span>}</td>
-          <td><div className="host-row-actions">{operationError && <HostErrorPopover label={`${item.alias} 작업 오류 상세`} title="작업 오류" message={operationError} className="host-operation-error"><AlertCircle size={14}/></HostErrorPopover>}<button className="button small" disabled={!connectable(item) || busy(item) || item.codex?.available === false} onClick={() => { setModal({ type: 'upgrade', id: item.id }); setDetailError(''); }}><ArrowUpCircle size={14}/>{upgrading ? '업그레이드 중' : '업그레이드'}</button><button className="button small" disabled={!bridge?.startCodexLogin || !connectable(item) || (!loginActive(item.login) && busy(item)) || item.codex?.available === false} onClick={() => { setModal({ type: 'login', id: item.id }); setLoginError(''); setCopiedCode(false); }}><UserRound size={14}/>{loginActive(item.login) ? '로그인 중' : '계정 전환'}</button><button className="icon-button" aria-label={`${item.alias} 호스트 조회`} disabled={!connectable(item) || busy(item)} onClick={() => run(() => bridge.refreshHosts([item.id]))}><RefreshCw size={15} className={running(item) ? 'spin' : ''}/></button></div></td>
+          <td><div className="host-row-actions">{operationError && <HostErrorPopover label={`${item.alias} 작업 오류 상세`} title="작업 오류" message={operationError} className="host-operation-error"><AlertCircle size={14}/></HostErrorPopover>}<ActionButton className="host-file-button" data-host-id={item.id} label={`${item.alias} 파일 관리`} tooltip="파일 관리" icon={FolderOpen} disabled={!connectable(item)} onClick={() => openFiles(item)}/><ActionButton label={`${item.alias} SSH 접속`} tooltip="SSH 접속" icon={Terminal} busy={terminalOpening.includes(item.id)} disabled={!bridge?.openSshTerminal || !connectable(item) || terminalOpening.includes(item.id)} onClick={() => openTerminal(item)}/><ActionButton label="업그레이드" tooltip="Codex 업그레이드" icon={ArrowUpCircle} busy={upgrading} disabled={!connectable(item) || busy(item) || item.codex?.available === false} onClick={() => { setModal({ type: 'upgrade', id: item.id }); setDetailError(''); }}/><ActionButton label="계정 전환" tooltip="Codex 계정 전환" icon={ArrowRightLeft} busy={loginActive(item.login)} disabled={!bridge?.startCodexLogin || !connectable(item) || (!loginActive(item.login) && busy(item)) || item.codex?.available === false} onClick={() => { setModal({ type: 'login', id: item.id }); setLoginError(''); setCopiedCode(false); }}/><ActionButton label={`${item.alias} 새로고침`} tooltip="새로고침" icon={RefreshCw} busy={running(item)} disabled={!connectable(item) || busy(item)} onClick={() => run(() => bridge.refreshHosts([item.id]))}/></div></td>
         </tr>;
 
   };
@@ -591,23 +612,26 @@ export function HostManager({ bridge, isDemo = false }) {
         <td colSpan={8}><div className="host-group-header">
           {group ? <button type="button" className="host-group-toggle" aria-label={`${name} ${group.collapsed ? '펼치기' : '접기'}`} aria-expanded={!group.collapsed} disabled={orderSaving || Boolean(action)} onClick={() => collapseGroup(group)}>{group.collapsed ? <ChevronRight size={15}/> : <ChevronDown size={15}/>} {group.collapsed ? <Folder size={16}/> : <FolderOpen size={16}/>}<strong>{name}</strong></button> : <span className="host-ungrouped-label"><FolderOpen size={16}/><strong>{name}</strong></span>}
           <span className="host-group-count numeric">{members.length}개</span>
-          {group && <div className="host-group-actions"><button type="button" className="icon-button" aria-label={`${name} 그룹 이름 변경`} disabled={orderSaving || Boolean(action)} onClick={() => openGroupForm(group)}><Pencil size={13}/></button><button type="button" className="icon-button" aria-label={`${name} 그룹 삭제`} disabled={orderSaving || Boolean(action)} onClick={() => setModal({ type: 'groupDelete', id: group.id, name, revision: state.revision })}><Trash2 size={13}/></button></div>}
+          {group && <div className="host-group-actions"><ActionButton label={`${name} 그룹 이름 변경`} tooltip="그룹 이름 변경" icon={Pencil} disabled={orderSaving || Boolean(action)} onClick={() => openGroupForm(group)}/><ActionButton label={`${name} 그룹 삭제`} tooltip="그룹 삭제" icon={Trash2} disabled={orderSaving || Boolean(action)} onClick={() => setModal({ type: 'groupDelete', id: group.id, name, revision: state.revision })}/></div>}
         </div></td>
       </tr>
       {!group?.collapsed && members.map(renderHost)}
     </React.Fragment>;
   };
 
+  const fileHost = state.hosts.find(item => item.id === fileHostId);
+  if (fileHost) return <main className="host-app host-file-app"><HostFiles key={fileHost.id} host={fileHost} bridge={bridge} onBack={closeFiles}/></main>;
   return <main className="host-app">
     <header className="toolbar"><div className="host-toolbar-title"><div className="host-title-line"><h1>호스트관리 <span aria-hidden="true">{state.hosts.length}</span></h1>{isDemo && <span className="demo-badge">예시 데이터</span>}</div>{state.configPath && <p className="host-config-path" title={state.configPath}>SSH 설정 <code>{state.configPath}</code></p>}</div><div className="toolbar-actions host-toolbar-actions">
       {selectedHosts.length > 0 && <>
         <span className="host-selected-count numeric" role="status">{selectedHosts.length}개 선택</span>
-        <button className="button" disabled={!bridge?.upgradeCodexBatch || batchRunning || orderSaving || Boolean(action)} onClick={() => openBatch('batchUpgrade')}><ArrowUpCircle size={13}/>선택 업그레이드</button>
-        <button className="button danger" disabled={!bridge?.deleteHosts || selectedBusy || orderSaving || Boolean(action)} onClick={() => openBatch('batchDelete')}><Trash2 size={13}/>선택 삭제</button>
+        <ActionButton label="선택 업그레이드" icon={ArrowUpCircle} disabled={!bridge?.upgradeCodexBatch || batchRunning || orderSaving || Boolean(action)} onClick={() => openBatch('batchUpgrade')}/>
+        <ActionButton className="danger" label="선택 삭제" icon={Trash2} disabled={!bridge?.deleteHosts || selectedBusy || orderSaving || Boolean(action)} onClick={() => openBatch('batchDelete')}/>
       </>}
-      <button className="button" aria-label="새로고침" aria-busy={refreshActive} disabled={!bridge || refreshActive || orderSaving || Boolean(action) || batchRunning} onClick={refreshHosts}><RefreshCw size={13} className={refreshActive ? 'spin' : ''}/>{refreshActive ? '새로고침 중' : '새로고침'}</button>
-      <button className="button" disabled={!bridge?.saveGroup || orderSaving} onClick={() => openGroupForm()}><Folder size={13}/>그룹 추가</button>
-      <button className="button primary" disabled={!bridge || orderSaving} onClick={() => openForm()}><Plus size={13}/>호스트 추가</button>
+      <ActionButton label="새로고침" icon={RefreshCw} busy={refreshActive} disabled={!bridge || refreshActive || orderSaving || Boolean(action) || batchRunning} onClick={refreshHosts}/>
+      {state.refresh.running && <ActionButton label="새로고침 취소" icon={X} onClick={() => run(() => bridge.cancelRefresh())}/>}
+      <ActionButton label="그룹 추가" icon={FolderPlus} disabled={!bridge?.saveGroup || orderSaving} onClick={() => openGroupForm()}/>
+      <ActionButton className="primary" label="호스트 추가" icon={Plus} disabled={!bridge || orderSaving} onClick={() => openForm()}/>
     </div></header>
     {batchRunning && <div className="host-batch-progress" role="status"><Loader2 size={13} className="spin"/>{batchTargets.length}개 호스트 업그레이드 중</div>}
     {batchResult && <section className={`host-batch-result ${batchResult.some(result => !result.success) ? 'has-failures' : ''}`} role="region" aria-label="일괄 업그레이드 결과">
@@ -617,15 +641,16 @@ export function HostManager({ bridge, isDemo = false }) {
     {notice && <div className="notice" role="alert"><span>{notice}</span><button className="icon-button" aria-label="알림 닫기" onClick={() => setNotice('')}><X size={16}/></button></div>}
     {state.error && <div className="host-config-error" role="alert">{state.error}</div>}
     {!bridge && <div className="runtime-notice">호스트 관리 기능은 데스크톱 앱에서 사용할 수 있습니다.</div>}
-    {refreshActive && <div className="host-refresh-bar" role="status"><span>새로고침 중</span>{state.refresh.running && <button className="text-button" onClick={() => run(() => bridge.cancelRefresh())}>조회 취소</button>}</div>}
+    {refreshActive && <span className="host-order-announcement" role="status">호스트 정보를 새로고침하고 있습니다.</span>}
     <span className="host-order-announcement" role="status">{orderSaving ? '호스트 순서 저장 중' : ''}</span>
     <div className="table-scroll host-table-scroll"><table className="host-table" aria-label="호스트 목록" aria-busy={orderSaving}><thead><tr><th className="host-selection-col"><SelectAllHosts checked={allSelected} mixed={selectedHosts.length > 0 && !allSelected} disabled={!state.hosts.length || action === 'deleteBatch'} onChange={event => setSelectedIds(event.target.checked ? state.hosts.map(host => host.id) : [])}/></th><th className="host-drag-col" aria-label="순서"/><th className="host-name-col">호스트</th><th className="host-address-col">접속 주소</th><th className="host-status-col">접속 상태</th><th className="host-version-col numeric">Codex 버전</th><th className="host-account-col">로그인 계정</th><th className="host-actions-col">작업</th></tr></thead>
       <tbody>{state.groups.length ? <>{state.groups.map(group => renderGroup(group.id, group))}{renderGroup(null)}</> : visibleHosts.map(renderHost)}{!state.hosts.length && <tr><td colSpan={8} className="empty">{bridge && !loaded ? '호스트 목록을 불러오는 중입니다.' : '등록된 호스트가 없습니다.'}</td></tr>}</tbody>
     </table></div>
     {modal?.type === 'batchUpgrade' && <HostModal alert title="선택 호스트 업그레이드" onClose={close} footer={<><button className="button" onClick={close}>취소</button><button className="button primary" disabled={batchRunning || !batchModalHosts.length} onClick={confirmBatchUpgrade}>업그레이드</button></>}><p>선택한 호스트의 Codex를 최신 버전으로 업그레이드합니다. 모든 대상의 업그레이드를 동시에 시작합니다. 호스트별 처리 결과는 목록에 표시됩니다.</p>{renderBatchList()}</HostModal>}
     {modal?.type === 'batchDelete' && <HostModal alert title="선택 호스트 삭제" onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button className="button danger" disabled={Boolean(action) || !batchModalHosts.length || batchModalBusy} onClick={confirmBatchDelete}>{action === 'deleteBatch' ? '삭제 중' : '호스트 삭제'}</button></>}><p>선택한 호스트를 SSH 설정 파일에서 삭제합니다. remote-mgmt 목록에서도 삭제됩니다.</p>{renderBatchList()}{batchModalBusy && <p className="host-inline-error" role="alert">작업 중인 호스트가 있습니다. 작업 종료 후 삭제하십시오.</p>}</HostModal>}
-    {modal?.type === 'details' && host && <HostModal wide title={`${host.alias} 호스트 정보`} onClose={close} tabs={<HostTabs active={detailTab} onChange={setDetailTab} idPrefix={tabsId}/>} footer={<><button className="button danger" disabled={Boolean(action) || busy(host) || orderSaving} onClick={() => { request.current++; setPassword(''); setModal({ type: 'delete', id: host.id, revision: state.revision }); }}><Trash2 size={14}/>호스트 삭제</button><button className="button" disabled={Boolean(action) || busy(host) || orderSaving} onClick={() => openForm(host)}><Pencil size={14}/>접속 정보 수정</button><button className="button" disabled={Boolean(action)} onClick={close}>닫기</button></>}>
+    {modal?.type === 'details' && host && <HostModal wide title={`${host.alias} 호스트 정보`} onClose={close} tabs={<HostTabs active={detailTab} onChange={setDetailTab} idPrefix={tabsId} filesDisabled={!connectable(host)}/>} footer={<><button className="button danger" disabled={Boolean(action) || busy(host) || orderSaving} onClick={() => { request.current++; setPassword(''); setModal({ type: 'delete', id: host.id, revision: state.revision }); }}><Trash2 size={14}/>호스트 삭제</button><button className="button" disabled={Boolean(action) || busy(host) || orderSaving} onClick={() => openForm(host)}><Pencil size={14}/>접속 정보 수정</button><button className="button" disabled={Boolean(action)} onClick={close}>닫기</button></>}>
       <HostDetails host={host} details={details} loading={detailLoading} error={detailError} keyError={keyError} keyResult={keyResult} keyHistory={keyHistory} password={password} setPassword={setPassword} action={action} tab={detailTab} idPrefix={tabsId} onInspect={() => performKeyAction('inspect')} onRegister={() => performKeyAction('register')} onGenerate={() => performKeyAction('generate')}/>
+      <div id={`${tabsId}-files-panel`} role="tabpanel" aria-labelledby={`${tabsId}-files-tab`} hidden={detailTab !== 'files'} tabIndex={0}><div className="host-files-launcher"><FolderOpen size={28}/><h3>파일 관리</h3><p>폴더 탐색과 파일 전송을 넓은 화면에서 진행합니다.</p><button className="button primary" disabled={!connectable(host)} onClick={() => openFiles(host)}><FolderOpen size={14}/>파일 관리 열기</button></div></div>
     </HostModal>}
     {modal?.type === 'form' && <HostModal title={modal.id ? '호스트 수정' : '호스트 추가'} onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button form="host-form" type="submit" className="button primary" disabled={Boolean(action)}>{action === 'save' ? '저장 중' : '저장'}</button></>}><HostForm draft={draft} groups={state.groups} onChange={setDraft} onSubmit={save}/></HostModal>}
     {modal?.type === 'upgrade' && host && <HostModal alert title="Codex 업그레이드" onClose={close} footer={<><button className="button" disabled={Boolean(action)} onClick={close}>취소</button><button className="button primary" disabled={Boolean(action) || busy(host)} onClick={confirmUpgrade}>{action === 'upgrade' ? '업그레이드 중' : '업그레이드'}</button></>}>

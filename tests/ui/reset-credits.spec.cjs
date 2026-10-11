@@ -50,7 +50,7 @@ async function openPicker(page) {
   await page.getByRole('button', { name: '초기화권 사용', exact: true }).click();
   const picker = page.getByRole('dialog', { name: '초기화권 목록', exact: true });
   await expect(picker).toBeVisible();
-  await expect(picker.getByRole('button', { name: '목록 새로 조회', exact: true })).toBeEnabled();
+  await expect(picker.getByRole('button', { name: '초기화권 목록 새로고침', exact: true })).toBeEnabled();
   return picker;
 }
 
@@ -122,11 +122,11 @@ test('보유 개수만 제공되거나 목록이 비어 있을 때 초기화권�
   await expect(picker).toContainText('초기화권 목록 정보가 제공되지 않았습니다.');
   await expect(picker.getByRole('radio')).toHaveCount(0);
   await expect(picker.getByRole('button', { name: '선택 완료', exact: true })).toBeDisabled();
-  await picker.getByRole('button', { name: '목록 새로 조회', exact: true }).click();
+  await picker.getByRole('button', { name: '초기화권 목록 새로고침', exact: true }).click();
   await expect(picker).toContainText('보유 개수와 목록이 일치하지 않습니다.');
   await expect(picker.getByRole('radio')).toHaveCount(0);
   await expect(picker.getByRole('button', { name: '선택 완료', exact: true })).toBeDisabled();
-  await picker.getByRole('button', { name: '목록 새로 조회', exact: true }).click();
+  await picker.getByRole('button', { name: '초기화권 목록 새로고침', exact: true }).click();
   await expect(picker.getByRole('radio', { name: /usable/ })).toBeDisabled();
   await expect(picker.getByRole('button', { name: '선택 완료', exact: true })).toBeDisabled();
   expect(await page.evaluate(() => window.operationCalls.filter(call => call.method === 'reset'))).toEqual([]);
@@ -155,7 +155,7 @@ test('목록을 다시 조회한 뒤 사용할 수 없어진 초기화권은 선
   ] });
   const picker = await openPicker(page);
   await picker.getByRole('radio', { name: /second-credit/ }).check();
-  await picker.getByRole('button', { name: '목록 새로 조회', exact: true }).click();
+  await picker.getByRole('button', { name: '초기화권 목록 새로고침', exact: true }).click();
   await expect(picker.getByRole('radio', { name: /second-credit/ })).toBeDisabled();
   await expect(picker.getByRole('radio', { name: /second-credit/ })).not.toBeChecked();
   await expect(picker.getByRole('button', { name: '선택 완료', exact: true })).toBeDisabled();
